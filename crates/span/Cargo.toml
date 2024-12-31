@@ -1,0 +1,13 @@
+[package]
+name = "span"
+version = "0.0.0"
+edition = "2021"
+authors = ["ryn <ryn@fppf.site>"]
+
+description = "Source location spans, file mapping, and identifier interning"
+
+[dependencies]
+codespan-reporting = "0.11.1"
+
+base = { path = "../base" }
+log = { path = "../log" }

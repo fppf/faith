@@ -1,0 +1,8 @@
+[package]
+name = "log"
+version = "0.0.0"
+authors = []
+edition = "2021"
+
+[dependencies]
+log = "0.4"

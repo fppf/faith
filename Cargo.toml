@@ -1,0 +1,15 @@
+[package]
+name = "faith"
+version = "0.0.0"
+edition = "2021"
+authors = ["ryn <ryn@fppf.site>"]
+
+[workspace]
+members = ["crates/*"]
+
+[dependencies]
+log = { path = "crates/log" }
+span = { path = "crates/span" }
+hir = { path = "crates/hir" }
+infer = { path = "crates/infer" }
+#mir = { path = "crates/mir" }

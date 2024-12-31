@@ -1,0 +1,11 @@
+[package]
+name = "syntax"
+version = "0.0.0"
+edition = "2021"
+authors = ["ryn <ryn@fppf.site>"]
+
+description = "AST, lexer, parser, and grammar"
+
+[dependencies]
+base = { path = "../base" }
+span = { path = "../span" }

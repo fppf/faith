@@ -1,0 +1,13 @@
+[package]
+name = "infer"
+version = "0.0.0"
+edition = "2021"
+authors = ["ryn <ryn@fppf.site>"]
+
+description = "Type inference on the HIR"
+
+[dependencies]
+base = { path = "../base" }
+span = { path = "../span" }
+log = { path = "../log" }
+hir = { path = "../hir" }

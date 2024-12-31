@@ -1,0 +1,141 @@
+use std::{
+    fmt,
+    ops::{Deref, DerefMut},
+};
+
+use crate::mir::{Expr, Label, Module};
+
+use pp::*;
+
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "l{}", Superscript(self.as_raw()))
+    }
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        MirPrinter::to_string(|p| p.print_expr(self)).fmt(f)
+    }
+}
+
+impl fmt::Display for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        MirPrinter::to_string(|p| p.print_module(self)).fmt(f)
+    }
+}
+
+struct MirPrinter {
+    pp: Printer,
+}
+
+impl Deref for MirPrinter {
+    type Target = Printer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pp
+    }
+}
+
+impl DerefMut for MirPrinter {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pp
+    }
+}
+
+impl PrintState for MirPrinter {}
+
+impl MirPrinter {
+    fn new() -> Self {
+        MirPrinter { pp: Printer::new() }
+    }
+
+    fn to_string<F>(f: F) -> String
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut printer = Self::new();
+        f(&mut printer);
+        printer.pp.eof()
+    }
+
+    fn print_label(&mut self, label: Label) {
+        self.word(label.to_string());
+    }
+
+    fn print_expr(&mut self, expr: &Expr) {
+        self.ibox(INDENT);
+        match expr {
+            Expr::Label(l) => self.print_label(*l),
+            Expr::Lit(l) => self.word(l.to_string()),
+            Expr::Tuple(es) => {
+                self.popen();
+                self.strsep(",", false, Breaks::Inconsistent, &es, |pp, e| {
+                    pp.print_expr(e)
+                });
+                self.pclose();
+            }
+            Expr::Let(l, e1, e2) => {
+                self.word_space("let");
+                self.print_label(*l);
+                self.space();
+                self.word_space("=");
+                self.print_expr(e1);
+                self.space();
+                self.word("in");
+                self.hardbreak();
+                self.break_offset_if_not_bol(1, -INDENT);
+                self.print_expr(e2);
+            }
+            Expr::Proj(e, i) => {
+                self.print_expr(e);
+                self.word(".");
+                self.word(i.to_string());
+            }
+            Expr::Lambda(args, body) => {
+                self.word("\\");
+                self.strsep("", false, Breaks::Inconsistent, &args, |pp, arg| {
+                    pp.print_label(*arg)
+                });
+                self.space();
+                self.word_space("->");
+                self.print_expr(body);
+            }
+            Expr::App(h, args) => {
+                self.word("(");
+                self.print_expr(h);
+                self.space();
+                self.strsep("", false, Breaks::Inconsistent, &args, |pp, e| {
+                    pp.print_expr(e)
+                });
+                self.word(")");
+            }
+            Expr::Case(l, tree) => {
+                self.cbox(0);
+                self.ibox(0);
+                self.word_space("case");
+                self.print_label(*l);
+                self.space();
+                self.word("{");
+                self.word("}");
+                self.end();
+                self.end();
+            }
+            _ => todo!(),
+        }
+        self.end();
+    }
+
+    fn print_module(&mut self, module: &Module) {
+        for item in &module.items {
+            self.word_space("val");
+            self.print_label(item.label);
+            self.space();
+            self.word_space("=");
+            self.cbox(INDENT);
+            self.print_expr(&item.body);
+            self.end();
+            self.hardbreak();
+        }
+    }
+}
