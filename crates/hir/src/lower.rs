@@ -15,7 +15,7 @@ use syntax::ast;
 
 use crate::{
     hir::{self, Ty},
-    Arena, Constructor, DefKind, HirId, HirMap, Res, TypeCache, TypeDecl, Value, Visitor,
+    Arena, Constructor, DefKind, HirId, HirMap, Res, TypeDecl, Value, Visitor,
 };
 
 pub fn lower_program_in<'ast, 'hir>(
@@ -156,7 +156,6 @@ impl<T> IndexMut<Namespace> for PerNs<T> {
 
 struct LoweringContext<'hir> {
     arena: &'hir Arena<'hir>,
-    type_cache: TypeCache<'hir>,
 
     hir_id: HirId,
 
@@ -187,7 +186,6 @@ impl<'hir> LoweringContext<'hir> {
     fn new(arena: &'hir Arena<'hir>) -> Self {
         Self {
             arena,
-            type_cache: TypeCache::new(arena),
             imports: Map::default(),
             hir_id: HirId::ZERO,
             values: HirMap::default(),
@@ -585,10 +583,18 @@ impl<'hir> LoweringContext<'hir> {
     ) -> Result<Ty<'hir>, LowerError> {
         use hir::{BaseType, TyKind, TypeVar};
         Ok(match &**typ {
-            ast::Type::Base(ast::BaseType::Unit) => self.type_cache.unit,
-            ast::Type::Base(ast::BaseType::Bool) => self.type_cache.bool,
-            ast::Type::Base(ast::BaseType::Str) => self.type_cache.str,
-            ast::Type::Base(ast::BaseType::Int32) => self.type_cache.i32,
+            ast::Type::Base(ast::BaseType::Unit) => {
+                self.arena.typ(TyKind::Base(BaseType::Unit), typ.span())
+            }
+            ast::Type::Base(ast::BaseType::Bool) => {
+                self.arena.typ(TyKind::Base(BaseType::Bool), typ.span())
+            }
+            ast::Type::Base(ast::BaseType::Str) => {
+                self.arena.typ(TyKind::Base(BaseType::Str), typ.span())
+            }
+            ast::Type::Base(ast::BaseType::Int32) => {
+                self.arena.typ(TyKind::Base(BaseType::Int32), typ.span())
+            }
             ast::Type::Var(id) => {
                 /*
                 let id = self

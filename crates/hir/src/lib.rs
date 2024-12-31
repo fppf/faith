@@ -21,32 +21,6 @@ pub fn parse_and_lower_program_in<'hir>(
     lower::lower_program_in(hir_arena, ast)
 }
 
-macro_rules! cache {
-    ($name:ident { $typ:ident, $new:ident }, $($id:ident = $e:expr,)+) => {
-        pub struct $name<'hir> {
-            $(pub $id: $typ<'hir>,)+
-        }
-
-        impl<'hir> $name<'hir> {
-            pub fn new(arena: &'hir Arena<'hir>) -> Self {
-                Self {
-                    $($id: $typ::$new(arena, $e, Span::dummy()),)+
-                }
-            }
-        }
-    }
-}
-
-cache! {
-    TypeCache { Ty, new },
-
-    abs = TyKind::Abstract,
-    unit = TyKind::Base(BaseType::Unit),
-    bool = TyKind::Base(BaseType::Bool),
-    str = TyKind::Base(BaseType::Str),
-    i32 = TyKind::Base(BaseType::Int32),
-}
-
 base::declare_arena!('hir, [
     set: HirSet,
     items: Items<'hir>,

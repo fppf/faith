@@ -35,7 +35,6 @@ struct TypeChecker<'hir> {
     arena: &'hir Arena<'hir>,
     program: &'hir Program<'hir>,
     env: HirMap<Ty<'hir>>,
-    type_cache: TypeCache<'hir>,
     type_var_src: TypeVarSource,
     skolem: SkolemId,
     constraints: Vec<Constraint<'hir, Ty<'hir>>>,
@@ -80,7 +79,6 @@ impl<'hir> TypeChecker<'hir> {
             arena,
             program,
             env: HirMap::default(),
-            type_cache: TypeCache::new(arena),
             type_var_src: TypeVarSource::new(1),
             skolem: SkolemId::ZERO,
             constraints: Vec::new(),
@@ -236,13 +234,14 @@ impl<'hir> TypeChecker<'hir> {
         Ok(())
     }
 
-    fn type_from_lit(&self, lit: hir::Lit) -> Ty<'hir> {
-        match lit {
-            hir::Lit::Unit => self.type_cache.unit,
-            hir::Lit::Bool(_) => self.type_cache.bool,
-            hir::Lit::Str(_) => self.type_cache.str,
-            hir::Lit::Int32(_) => self.type_cache.i32,
-        }
+    fn type_from_lit(&self, lit: hir::Lit, span: Span) -> Ty<'hir> {
+        let base = match lit {
+            hir::Lit::Unit => BaseType::Unit,
+            hir::Lit::Bool(_) => BaseType::Bool,
+            hir::Lit::Str(_) => BaseType::Str,
+            hir::Lit::Int32(_) => BaseType::Int32,
+        };
+        self.arena.typ(TyKind::Base(base), span)
     }
 
     fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
@@ -348,7 +347,7 @@ impl<'hir> TypeChecker<'hir> {
                     self.env.insert(hir_id, expected);
                     Ok(())
                 }
-                (PatKind::Lit(l), _) if self.type_from_lit(l) == expected => Ok(()),
+                (PatKind::Lit(l), _) if self.type_from_lit(l, pat.span) == expected => Ok(()),
                 (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {
                     if ps.len() == ts.len() {
                         for (p, &t) in ps.iter().zip(*ts) {
@@ -387,7 +386,7 @@ impl<'hir> TypeChecker<'hir> {
                     self.env.insert(hir_id, var);
                     Ok(var)
                 }
-                PatKind::Lit(l) => Ok(self.type_from_lit(l)),
+                PatKind::Lit(l) => Ok(self.type_from_lit(l, pat.span)),
                 PatKind::Ann(pat, typ) => {
                     self.check_pat(pat, *typ)?;
                     Ok(*typ)
@@ -419,11 +418,13 @@ impl<'hir> TypeChecker<'hir> {
     fn check_expr(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
         match (*expr.kind(), expected.kind()) {
             (ExprKind::App(..) | ExprKind::Path(_), _) => self.check_app(expr, expected),
-            (ExprKind::Lit(l), bt @ TyKind::Base(_)) if self.type_from_lit(l).kind() == bt => {
+            (ExprKind::Lit(l), bt @ TyKind::Base(_))
+                if self.type_from_lit(l, expr.span()).kind() == bt =>
+            {
                 Ok(())
             }
             (ExprKind::Lit(l), TyKind::Var(_)) => {
-                self.constrain(expected, self.type_from_lit(l));
+                self.constrain(expected, self.type_from_lit(l, expr.span()));
                 Ok(())
             }
             (ExprKind::Lambda(lambda), TyKind::Var(_)) => {
@@ -563,7 +564,7 @@ impl<'hir> TypeChecker<'hir> {
                 self.infer_app(expr)?
             }
             ExprKind::External(_s) => todo!(),
-            ExprKind::Lit(l) => self.type_from_lit(l),
+            ExprKind::Lit(l) => self.type_from_lit(l, expr.span()),
             ExprKind::Lambda(lambda) => self.infer_lambda(lambda.args, lambda.body)?,
             ExprKind::Let(binds, body) => {
                 for bind in binds {
@@ -595,7 +596,10 @@ impl<'hir> TypeChecker<'hir> {
                 self.arena.typ(TyKind::Vector(base_typ), expr.span())
             }
             ExprKind::Seq(e1, e2) => {
-                self.check_expr(e1, self.type_cache.unit)?;
+                self.check_expr(
+                    e1,
+                    self.arena.typ(TyKind::Base(BaseType::Unit), Span::dummy()),
+                )?;
                 self.infer_expr(e2)?
             }
             ExprKind::Case(scrutinee, arms) => {
@@ -610,7 +614,10 @@ impl<'hir> TypeChecker<'hir> {
                 var
             }
             ExprKind::If(cond, then_expr, else_expr) => {
-                self.check_expr(cond, self.type_cache.bool)?;
+                self.check_expr(
+                    cond,
+                    self.arena.typ(TyKind::Base(BaseType::Bool), Span::dummy()),
+                )?;
                 let then_typ = self.infer_expr(then_expr)?;
                 let else_typ = self.infer_expr(else_expr)?;
                 self.constrain(then_typ, else_typ);
