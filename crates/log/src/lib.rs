@@ -23,10 +23,18 @@ pub fn block_log<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    BLOCK_LEVEL.fetch_add(2, SeqCst);
+    block_in();
     let res = f();
-    BLOCK_LEVEL.fetch_sub(2, SeqCst);
+    block_out();
     res
+}
+
+pub fn block_in() {
+    BLOCK_LEVEL.fetch_add(2, SeqCst);
+}
+
+pub fn block_out() {
+    BLOCK_LEVEL.fetch_sub(2, SeqCst);
 }
 
 struct Logger;
@@ -37,8 +45,8 @@ impl log::Log for Logger {
     }
 
     fn log(&self, record: &log::Record) {
-        let block_level = BLOCK_LEVEL.load(SeqCst);
         if self.enabled(record.metadata()) {
+            let block_level = BLOCK_LEVEL.load(SeqCst);
             println!("{}{}", " ".repeat(block_level), record.args());
         }
     }

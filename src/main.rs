@@ -28,7 +28,7 @@ fn run_passes(path: &Path) -> Result<(), diag::Diagnostic> {
     let hir_arena = hir::Arena::default();
     let hir = hir::parse_and_lower_program_in(&hir_arena, path)?;
 
-    println!("{:#?}", hir);
+    //println!("{:#?}", hir);
     let _data = infer::infer_program_in(&hir_arena, hir)?;
 
     //for (e, t) in data.expr_types {

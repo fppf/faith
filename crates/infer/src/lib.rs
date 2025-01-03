@@ -132,8 +132,9 @@ impl<'hir> TypeChecker<'hir> {
             }
             ModExprKind::Struct(items) => {
                 let mut specs = Specs::default();
-                log::trace!("{:?}", items);
                 log::trace!("{{");
+                log::block_in();
+                //log::trace!("{:?}", items);
                 for (&id, value) in &items.values {
                     let typ = match value.typ {
                         Some(typ) => {
@@ -142,11 +143,12 @@ impl<'hir> TypeChecker<'hir> {
                         }
                         None => self.infer_expr(value.expr)?,
                     };
-                    log::trace!("  {id} : {typ}");
+                    log::trace!("{id} : {typ}");
                     specs.values.insert(id, typ);
                 }
+                log::block_out();
                 log::trace!("}}");
-                log::trace!("{:?}", specs);
+                //log::trace!("{:?}", specs);
                 ModTypeKind::Sig(self.arena.alloc(specs))
             }
             ModExprKind::Functor(id, mt, body) => {
@@ -204,7 +206,7 @@ impl<'hir> TypeChecker<'hir> {
                             if l_value != r_value {
                                 return Err(InferError::SpecMismatch(
                                     l_value.span(),
-                                    l_value.span(),
+                                    r_value.span(),
                                 ));
                             }
                         }
