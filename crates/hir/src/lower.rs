@@ -280,8 +280,6 @@ impl<'hir> LoweringContext<'hir> {
                 .ok_or(LowerError::Resolve(path.to_string(), path.span()))?;
         }
 
-        println!("... {curr:?}");
-
         if ns == Namespace::Value
             && let Some(hir_id) = curr.values.get(&path.leaf())
         {
@@ -335,7 +333,6 @@ impl<'hir> LoweringContext<'hir> {
         for item in items {
             self.lower_item(item, &mut seen, &mut hir_items)?;
         }
-        log::trace!("{:?}", hir_items);
         Ok(self.arena.alloc(hir_items))
     }
 
@@ -345,6 +342,7 @@ impl<'hir> LoweringContext<'hir> {
         seen: &mut Seen,
         items: &mut hir::Items<'hir>,
     ) -> Result<(), LowerError> {
+        log::trace!("lower_item {:?}", item);
         match **item {
             ast::Item::Type(decls) => {
                 self.lower_type_decl_group(decls, seen, items)?;
@@ -366,7 +364,6 @@ impl<'hir> LoweringContext<'hir> {
                         None => None,
                     },
                 };
-                log::trace!("{id} ~> {}", value.expr);
                 items.values.insert(id, value);
                 self.values.insert(hir_id, value);
             }
@@ -386,7 +383,8 @@ impl<'hir> LoweringContext<'hir> {
                 seen.update(Namespace::Mod, id)?;
                 let mod_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
                 self.current_module_mut().modules.insert(id, mod_id);
-                self.with_module(mod_id, |self_| self_.lower_mod_expr(mexpr))?;
+                let mexpr = self.with_module(mod_id, |self_| self_.lower_mod_expr(mexpr))?;
+                items.modules.insert(id, mexpr);
             }
             ast::Item::ModType(id, mtyp) => {
                 seen.update(Namespace::Sig, id)?;
@@ -404,7 +402,6 @@ impl<'hir> LoweringContext<'hir> {
             ast::ModExpr::Path(p) => todo!(),
             ast::ModExpr::Struct(items) => {
                 let items = self.lower_items(items)?;
-                log::trace!("{:?}", items);
                 hir::ModExprKind::Struct(items)
             }
             ast::ModExpr::Functor(id, mtyp, mexpr) => {

@@ -213,6 +213,7 @@ pub enum ModExprKind<'hir> {
 pub struct Items<'hir> {
     pub values: Map<Ident, Value<'hir>>,
     pub types: HirSet,
+    pub modules: Map<Ident, &'hir ModExpr<'hir>>,
 
     pub type_groups: HirMap<HirSet>,
 }

@@ -134,7 +134,6 @@ impl<'hir> TypeChecker<'hir> {
                 let mut specs = Specs::default();
                 log::trace!("{{");
                 log::block_in();
-                //log::trace!("{:?}", items);
                 for (&id, value) in &items.values {
                     let typ = match value.typ {
                         Some(typ) => {
@@ -145,6 +144,10 @@ impl<'hir> TypeChecker<'hir> {
                     };
                     log::trace!("{id} : {typ}");
                     specs.values.insert(id, typ);
+                }
+                for (id, mexpr) in &items.modules {
+                    log::trace!("mod {id}");
+                    self.infer_mod_expr(mexpr)?;
                 }
                 log::block_out();
                 log::trace!("}}");
