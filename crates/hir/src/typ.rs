@@ -1,4 +1,4 @@
-use std::{fmt, iter::Skip};
+use std::{fmt, hash::Hash, iter::Skip};
 
 use base::{
     arena::Interned,
@@ -12,7 +12,7 @@ use crate::{Arena, Path, WebId, NO_WEB};
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
 //       don't allow Ty::new(..), make it a method on a ctx.
-#[derive(Clone, Copy, Hash, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Ty<'hir>(Interned<'hir, TyKind<'hir>>, Span);
 
 impl PartialEq for Ty<'_> {
@@ -22,6 +22,13 @@ impl PartialEq for Ty<'_> {
 }
 
 impl Eq for Ty<'_> {}
+
+impl Hash for Ty<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Only hash type pointer.
+        self.0.hash(state);
+    }
+}
 
 #[cfg(test)]
 mod test {
