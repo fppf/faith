@@ -12,7 +12,7 @@ use crate::constraint::Constraint;
 pub enum InferError<'hir> {
     ResolveFail(Path<'hir>),
     TypeUnifyFail(UnifyError<'hir, Ty<'hir>>),
-    //TypeMismatch(Ty<'hir>, Ty<'hir>),
+    TypeMismatch(Ty<'hir>, Ty<'hir>),
     SpecMismatch(Span, Span),
     ModTypeMismatch(Span, Span),
     MissingItems(Span, Span, Vec<Span>),
@@ -31,12 +31,12 @@ impl From<InferError<'_>> for Diagnostic {
                 .with_message(format!("cannot find path `{path}` in this scope"))
                 .with_labels(vec![Label::new(path.span(), "not found").primary()]),
             InferError::TypeUnifyFail(e) => e.into(),
-            // InferError::TypeMismatch(t1, t2) => Diagnostic::new(Level::Error)
-            //     .with_message(format!("types `{t1}` and `{t2}` do not match"))
-            //     .with_labels(vec![
-            //         Label::new(t1.span(), "type originating from here"),
-            //         Label::new(t2.span(), "does not match type originating from here"),
-            //     ]),
+            InferError::TypeMismatch(t1, t2) => Diagnostic::new(Level::Error)
+                .with_message(format!("types `{t1}` and `{t2}` do not match"))
+                .with_labels(vec![
+                    Label::new(t1.span(), "type originating from here"),
+                    Label::new(t2.span(), "does not match type originating from here"),
+                ]),
             InferError::SpecMismatch(s1, s2) => Diagnostic::new(Level::Error)
                 .with_message("specifications do not match")
                 .with_labels(vec![

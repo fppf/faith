@@ -45,6 +45,15 @@ impl fmt::Debug for Span {
     }
 }
 
+impl From<Range<usize>> for Span {
+    fn from(range: Range<usize>) -> Self {
+        Self::new(
+            BytePos::from_usize(range.start),
+            BytePos::from_usize(range.end),
+        )
+    }
+}
+
 impl Span {
     #[inline(always)]
     pub fn new(start: BytePos, end: BytePos) -> Self {
@@ -54,7 +63,7 @@ impl Span {
 
     #[inline]
     pub fn dummy() -> Self {
-        Self::new(BytePos::from_u32(0), BytePos::from_u32(0))
+        Self::from(0..0)
     }
 
     #[inline]

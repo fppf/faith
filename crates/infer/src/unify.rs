@@ -62,11 +62,6 @@ impl<K: UnifyKey> VarValue<K> {
     }
 }
 
-/// Union-find implementation derived from <https://crates.io/crates/ena>.
-///
-/// You can define types for keys in the table by implementing `UnifyKey`.
-/// Keys can have values associated with them; for non-trivial values, you
-/// must specify how to merge them, with the potential for errors.
 pub struct UnificationTable<K: UnifyKey> {
     values: Vec<VarValue<K>>,
 }

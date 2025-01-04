@@ -203,14 +203,11 @@ impl<'hir> TypeChecker<'hir> {
         match (&lhs.kind, &rhs.kind) {
             (ModTypeKind::Sig(l), ModTypeKind::Sig(r)) => {
                 let mut missing_items = Vec::new();
-                for (id, l_value) in &l.values {
+                for (id, &l_val_typ) in &l.values {
                     match r.values.get(id) {
-                        Some(r_value) => {
-                            if l_value != r_value {
-                                return Err(InferError::SpecMismatch(
-                                    l_value.span(),
-                                    r_value.span(),
-                                ));
+                        Some(&r_val_typ) => {
+                            if l_val_typ != r_val_typ {
+                                return Err(InferError::TypeMismatch(l_val_typ, r_val_typ));
                             }
                         }
                         None => {

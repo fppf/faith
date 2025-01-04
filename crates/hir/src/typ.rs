@@ -12,8 +12,31 @@ use crate::{Arena, Path, WebId, NO_WEB};
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
 //       don't allow Ty::new(..), make it a method on a ctx.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Ty<'hir>(Interned<'hir, Sp<TyKind<'hir>>>);
+#[derive(Clone, Copy, Hash, Debug)]
+pub struct Ty<'hir>(Interned<'hir, TyKind<'hir>>, Span);
+
+impl PartialEq for Ty<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind() == other.kind()
+    }
+}
+
+impl Eq for Ty<'_> {}
+
+#[cfg(test)]
+mod test {
+    use super::{BaseType, TyKind};
+    use crate::Arena;
+    use span::{BytePos, Span};
+
+    #[test]
+    fn equality() {
+        let arena = Arena::default();
+        let t1 = arena.typ(TyKind::Base(BaseType::Unit), Span::from(0..1));
+        let t2 = arena.typ(TyKind::Base(BaseType::Unit), Span::from(1..2));
+        assert_eq!(t1, t2);
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyKind<'hir> {
@@ -225,7 +248,7 @@ pub trait Substitutable<'hir>: Copy + PartialEq + fmt::Display {
 impl<'hir> Ty<'hir> {
     #[inline]
     pub fn new(arena: &'hir Arena<'hir>, kind: TyKind<'hir>, span: Span) -> Self {
-        Ty(Interned::new_unchecked(arena.alloc(Sp::new(kind, span))))
+        Ty(Interned::new_unchecked(arena.alloc(kind)), span)
     }
 
     #[inline]
@@ -235,7 +258,7 @@ impl<'hir> Ty<'hir> {
 
     #[inline]
     pub fn span(&self) -> Span {
-        self.0.span()
+        self.1
     }
 
     pub fn visit_with<V>(&self, v: &mut V)
