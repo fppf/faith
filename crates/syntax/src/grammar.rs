@@ -976,7 +976,16 @@ fn mod_expr_struct<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>>
     }
     let span = p.end(m);
     p.expect(R_BRACE)?;
-    Ok(Sp::new(ModExpr::Struct(alloc_iter!(p, items)), span))
+    let me = Sp::new(ModExpr::Struct(alloc_iter!(p, items)), span);
+    if p.eat(COLON) {
+        let mt = mod_type(p)?;
+        Ok(Sp::new(
+            ModExpr::Ann(alloc!(p, me), alloc!(p, mt)),
+            p.end(m),
+        ))
+    } else {
+        Ok(me)
+    }
 }
 
 fn mod_expr_import<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
