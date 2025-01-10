@@ -6,7 +6,7 @@ use std::{
 
 thread_local! {
     static LOGGER: RefCell<Logger> = RefCell::default();
-    static MAX_LEVEL: Cell<Level> = Cell::new(Level::Error);
+    static MAX_LEVEL: Cell<Level> = const { Cell::new(Level::Warn) };
 }
 
 static BLOCK_LEVEL: AtomicUsize = AtomicUsize::new(0);
@@ -49,18 +49,10 @@ pub fn block_out() {
     BLOCK_LEVEL.fetch_sub(2, SeqCst);
 }
 
+#[derive(Default)]
 struct Logger {
     #[cfg(debug_assertions)]
     buffer: String,
-}
-
-impl Default for Logger {
-    fn default() -> Self {
-        Self {
-            #[cfg(debug_assertions)]
-            buffer: String::new(),
-        }
-    }
 }
 
 impl Logger {
