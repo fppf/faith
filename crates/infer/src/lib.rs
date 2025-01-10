@@ -140,7 +140,7 @@ impl<'hir> TypeChecker<'hir> {
                             self.check_expr_poly(value.expr, typ)?;
                             typ
                         }
-                        None => self.infer_expr(value.expr)?,
+                        None => self.infer_solve_expr(value.expr)?,
                     };
                     log::trace!("{id} : {typ}");
                     specs.values.insert(id, typ);

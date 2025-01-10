@@ -21,6 +21,15 @@ pub fn parse_and_lower_program_in<'hir>(
     lower::lower_program_in(hir_arena, ast)
 }
 
+pub fn parse_and_lower_str_program_in<'hir>(
+    hir_arena: &'hir Arena<'hir>,
+    src: &str,
+) -> Result<&'hir Program<'hir>, Diagnostic> {
+    let ast_arena = syntax::Arena::default();
+    let ast = syntax::parse_str_program_in(&ast_arena, src)?;
+    lower::lower_program_in(hir_arena, ast)
+}
+
 base::declare_arena!('hir, [
     set: HirSet,
     items: Items<'hir>,

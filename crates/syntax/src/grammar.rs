@@ -529,7 +529,7 @@ fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
         }
         UNIT | LIT(..) => pat_lit(p),
         L_PAREN => pat_paren(p),
-        _ => Err(ParseError::new("expected an atomic expression", p.end(m))),
+        _ => Err(ParseError::new("expected an atomic pattern", p.end(m))),
     }
 }
 
@@ -570,7 +570,7 @@ fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
                     return Err(ParseError::new("pattern paths must be either fresh variable bindings or paths to constructors", path.span()));
                 }
                 PathKind::Ident(IdentKind::Var) => {
-                    return pat_atom(p);
+                    return Ok(Sp::new(Pat::Var(path.leaf()), path.span()));
                 }
                 _ => (),
             }

@@ -8,8 +8,4 @@ authors = ["ryn <ryn@fppf.site>"]
 members = ["crates/*"]
 
 [dependencies]
-log = { path = "crates/log" }
-span = { path = "crates/span" }
-hir = { path = "crates/hir" }
-infer = { path = "crates/infer" }
-#mir = { path = "crates/mir" }
+driver = { path = "crates/driver" }

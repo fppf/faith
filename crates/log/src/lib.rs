@@ -1,22 +1,34 @@
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::{
+    cell::{Cell, RefCell},
+    fmt,
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+};
 
-pub use log::*;
+thread_local! {
+    static LOGGER: RefCell<Logger> = RefCell::default();
+    static MAX_LEVEL: Cell<Level> = Cell::new(Level::Error);
+}
 
-static LOGGER: Logger = Logger;
 static BLOCK_LEVEL: AtomicUsize = AtomicUsize::new(0);
 
-pub fn init(trace: bool) -> Result<(), log::SetLoggerError> {
-    #[cfg(debug_assertions)]
-    let max_level = if trace {
-        log::LevelFilter::Trace
-    } else {
-        log::LevelFilter::Info
-    };
+fn with_logger<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut Logger) -> R,
+{
+    LOGGER.with(|l| f(&mut l.borrow_mut()))
+}
 
-    #[cfg(not(debug_assertions))]
-    let max_level = log::LevelFilter::Off;
+pub fn init(level: Level) {
+    MAX_LEVEL.set(level);
+}
 
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(max_level))
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
 }
 
 pub fn block_log<F, R>(f: F) -> R
@@ -37,21 +49,82 @@ pub fn block_out() {
     BLOCK_LEVEL.fetch_sub(2, SeqCst);
 }
 
-struct Logger;
+struct Logger {
+    #[cfg(debug_assertions)]
+    buffer: String,
+}
 
-impl log::Log for Logger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= Level::Trace
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            let block_level = BLOCK_LEVEL.load(SeqCst);
-            println!("{}{}", " ".repeat(block_level), record.args());
+impl Default for Logger {
+    fn default() -> Self {
+        Self {
+            #[cfg(debug_assertions)]
+            buffer: String::new(),
         }
     }
+}
 
-    fn flush(&self) {}
+impl Logger {
+    fn log(&mut self, args: fmt::Arguments<'_>) {
+        let block_level = BLOCK_LEVEL.load(SeqCst);
+        let msg = format!("{}{}", " ".repeat(block_level), args);
+        println!("{msg}");
+
+        #[cfg(debug_assertions)]
+        self.buffer.push_str(&msg);
+    }
+}
+
+#[cfg(debug_assertions)]
+pub fn get_buffer() -> String {
+    with_logger(|l| l.buffer.clone())
+}
+
+pub fn log(level: Level, args: fmt::Arguments<'_>) {
+    if level <= MAX_LEVEL.get() {
+        with_logger(|l| l.log(args));
+    }
+}
+
+#[macro_export]
+macro_rules! log {
+    ($level:expr, $($arg:tt)+) => {
+        $crate::log($level, format_args!($($arg)+));
+    };
+}
+
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Error, $($arg)+);
+    };
+}
+
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Warn, $($arg)+);
+    };
+}
+
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Info, $($arg)+);
+    };
+}
+
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Debug, $($arg)+);
+    };
+}
+
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Trace, $($arg)+);
+    };
 }
 
 #[macro_export]

@@ -23,7 +23,7 @@ pub const SRC_EXT: &str = "fth";
 
 thread_local! {
     /// The global source map.
-    static SOURCE_MAP: RefCell<SourceMap> = RefCell::new(SourceMap::default());
+    static SOURCE_MAP: RefCell<SourceMap> = RefCell::default();
 }
 
 pub fn with_source_map<F, R>(f: F) -> R
@@ -206,7 +206,7 @@ impl SourceMap {
             path: path.clone(),
             err,
         })?;
-        log::info!(target: "SPAN", "loading file '{}'", path.display());
+        log::info!("loading file '{}'", path.display());
         let src = fs::read_to_string(&path).map_err(|err| LoadError {
             path: path.clone(),
             err,

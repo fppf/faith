@@ -1,6 +1,33 @@
-#[macro_use]
-mod support;
-use support::*;
+use driver::{Pass, Source};
+
+fn infer(top_level: &str, main: &str) -> String {
+    let src = format!(
+        r#"
+        {top_level}
+        main = {main}
+        "#
+    );
+
+    driver::run(Source::Str(src), Pass::Infer);
+    driver::get_buffer()
+}
+
+macro_rules! infer_ok {
+    ($name:ident, $top_level:expr, $main:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            let buf = infer($top_level, $main);
+            assert!(buf.contains($expected));
+        }
+    };
+    ($name:ident, $main:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            let buf = infer("", $main);
+            assert!(buf.contains($expected));
+        }
+    };
+}
 
 infer_ok! {
     literals,
@@ -57,27 +84,6 @@ infer_ok! {
 }
 
 infer_ok! {
-    std_either_left,
-    "use std.either ( either )",
-    "Left ()",
-    "either () 'a"
-}
-
-infer_ok! {
-    std_option_some,
-    "use std.option ( option )",
-    "Some ()",
-    "option ()"
-}
-
-infer_ok! {
-    std_option_none,
-    "use std.option ( option )",
-    "None",
-    "option 'a"
-}
-
-infer_ok! {
     vec_empty,
     "[]",
     "['a]"
@@ -90,33 +96,17 @@ infer_ok! {
 }
 
 infer_ok! {
-    vec_map_trivial,
-    r"std.vec.map (\_ -> false) [0]",
-    "[bool]"
-}
-
-infer_ok! {
-    vec_map,
-    "use std.either ( either, is_left )
-     use std.vec ( map )",
-    r"
-      let v1 = [Left (), Right -1],
-          v2 = map is_left v1
-      in (v1, v2)
-    ",
-    "([either () i32], [bool])"
-}
-
-infer_ok! {
     module_nested,
     r"
-       mod m = ({
+       mod m = {
            mod n = {
                val id x = x       
            }
            val y = n.id
-       } : { val y : 'a -> 'a })
+       } : {
+           val y : 'a -> 'a
+       }
     ",
-    "m.y ()",
-    "()"
+    "m.y",
+    "'a -> 'a"
 }

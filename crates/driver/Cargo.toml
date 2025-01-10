@@ -1,0 +1,11 @@
+[package]
+name = "driver"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+log = { path = "../log" }
+base = { path = "../base" }
+span = { path = "../span" }
+hir = { path = "../hir" }
+infer = { path = "../infer" }
