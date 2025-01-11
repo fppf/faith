@@ -1,4 +1,4 @@
-use driver::{Pass, Source};
+use driver::{Mode, Pass, Source};
 
 fn infer(top_level: &str, main: &str) -> String {
     let src = format!(
@@ -8,7 +8,7 @@ fn infer(top_level: &str, main: &str) -> String {
         "#
     );
 
-    driver::run(Source::Str(src), Pass::Infer);
+    driver::run(Source::Str(src), Mode::Test, Pass::Infer);
     driver::get_buffer()
 }
 
@@ -96,6 +96,28 @@ infer_ok! {
 }
 
 infer_ok! {
+    module_empty,
+    r"
+        mod m = {} : {}
+    ",
+    "()",
+    "()"
+}
+
+infer_ok! {
+    module_single_value,
+    r"
+        mod m = {
+            val x = ()
+        } : {
+            val x : ()
+        }
+    ",
+    "m.x",
+    "()"
+}
+
+infer_ok! {
     module_nested,
     r"
        mod m = {
@@ -109,4 +131,17 @@ infer_ok! {
     ",
     "m.y",
     "'a -> 'a"
+}
+
+infer_ok! {
+    module_restriction,
+    r"
+        mod m = {
+            val id x = x
+        } : {
+            val id : () -> ()
+        }
+    ",
+    "m.id",
+    "() -> ()"
 }

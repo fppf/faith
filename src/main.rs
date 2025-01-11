@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use driver::{Pass, Source};
+use driver::{Mode, Pass, Source};
 
 fn main() {
     let args: Vec<_> = env::args().collect();
@@ -10,5 +10,5 @@ fn main() {
     }
 
     let program_path = PathBuf::from(&args[1]);
-    driver::run(Source::File(program_path), Pass::Infer);
+    driver::run(Source::File(program_path), Mode::Real, Pass::Infer);
 }

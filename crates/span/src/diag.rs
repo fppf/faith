@@ -1,10 +1,10 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, io};
 
 use codespan_reporting::{
     diagnostic::{self, Severity},
     term::{
         emit as term_emit,
-        termcolor::{ColorChoice, StandardStream},
+        termcolor::{ColorChoice, ColorSpec, NoColor, StandardStream, WriteColor},
         Config,
     },
 };
@@ -30,17 +30,71 @@ where
     with_diagnostic_store(|store| store.diags.push(diag.into()));
 }
 
-pub fn report() -> bool {
+enum ReportWriter {
+    Test(NoColor<Vec<u8>>),
+    Real(StandardStream),
+}
+
+impl io::Write for ReportWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Test(w) => w.write(buf),
+            Self::Real(w) => w.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Test(w) => w.flush(),
+            Self::Real(w) => w.flush(),
+        }
+    }
+}
+
+impl WriteColor for ReportWriter {
+    fn supports_color(&self) -> bool {
+        match self {
+            Self::Test(w) => w.supports_color(),
+            Self::Real(w) => w.supports_color(),
+        }
+    }
+
+    fn set_color(&mut self, spec: &ColorSpec) -> std::io::Result<()> {
+        match self {
+            Self::Test(w) => w.set_color(spec),
+            Self::Real(w) => w.set_color(spec),
+        }
+    }
+
+    fn reset(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Test(w) => w.reset(),
+            Self::Real(w) => w.reset(),
+        }
+    }
+}
+
+pub fn report(test: bool) -> bool {
     let config = Config::default();
-    let mut stderr = StandardStream::stderr(ColorChoice::Always);
+
+    let mut w = if test {
+        ReportWriter::Test(NoColor::new(Vec::new()))
+    } else {
+        ReportWriter::Real(StandardStream::stderr(ColorChoice::Always))
+    };
 
     with_diagnostic_store(|store| {
         if store.diags.iter().any(Diagnostic::is_error) {
             crate::with_source_map(|sm| {
                 for diag in &store.diags {
-                    term_emit(&mut stderr, &config, sm, &convert(sm, diag.clone())).unwrap();
+                    term_emit(&mut w, &config, sm, &convert(sm, diag.clone())).unwrap();
                 }
             });
+
+            if let ReportWriter::Test(w) = w {
+                log::error!("{}", String::from_utf8_lossy(&w.into_inner()));
+            }
+
             true
         } else {
             false

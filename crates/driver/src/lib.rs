@@ -15,21 +15,26 @@ pub enum Source {
     File(PathBuf),
 }
 
+#[derive(PartialEq)]
+pub enum Mode {
+    Test,
+    Real,
+}
+
 pub use log::get_buffer;
 
-pub fn run(src: Source, stop_after: Pass) {
-    #[cfg(debug_assertions)]
-    log::init(Level::Trace);
-
-    #[cfg(not(debug_assertions))]
-    log::init(Level::Warn);
+pub fn run(src: Source, mode: Mode, stop_after: Pass) {
+    match mode {
+        Mode::Test => log::init(Level::Trace),
+        Mode::Real => log::init(Level::Warn),
+    };
 
     match run_passes(src, stop_after) {
         Ok(()) => (),
         Err(e) => diag::emit(e),
     }
 
-    if diag::report() {
+    if diag::report(mode == Mode::Test) {
         std::process::exit(1);
     }
 }
