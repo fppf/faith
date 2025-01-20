@@ -1,8 +1,9 @@
 #![feature(never_type)]
+#![allow(unused)]
 
 use base::{hash::Map, pp::FormatIterator};
 use hir::*;
-use span::{diag::Diagnostic, Ident, Span, Sym};
+use span::{Ident, Span, Sym, diag::Diagnostic};
 
 mod constraint;
 mod substitution;
@@ -379,41 +380,38 @@ impl<'hir> TypeChecker<'hir> {
 
     /// Infer a type for a pattern.
     fn infer_pat(&mut self, pat: &'hir Pat<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        log::block!(
-            "infer_pat {pat}",
-            match pat.kind {
-                PatKind::Wild => Ok(self.fresh_var()),
-                PatKind::Var(_, hir_id) => {
-                    let var = self.fresh_var();
-                    self.env.insert(hir_id, var);
-                    Ok(var)
-                }
-                PatKind::Lit(l) => Ok(self.type_from_lit(l, pat.span)),
-                PatKind::Ann(pat, typ) => {
-                    self.check_pat(pat, *typ)?;
-                    Ok(*typ)
-                }
-                PatKind::Tuple(pats) => {
-                    Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span))
-                }
-                PatKind::Constructor(cons, args) => {
-                    // TODO. well-formed check for cons_t
-                    let cons_typ = todo!(); //self.lookup_type(self.arena.path(cons, []))?;
-
-                    let cons_typ = self.instantiate(cons_typ);
-                    if args.is_empty() {
-                        Ok(cons_typ)
-                    } else {
-                        let arg_typs = self.infer_pats(args)?;
-                        let ret_typ = self.fresh_var();
-
-                        self.constrain(Ty::n_arrow(self.arena, arg_typs, ret_typ), cons_typ);
-                        Ok(ret_typ)
-                    }
-                }
-                PatKind::Or(_pats) => todo!("implement or patterns"),
+        log::block!("infer_pat {pat}", match pat.kind {
+            PatKind::Wild => Ok(self.fresh_var()),
+            PatKind::Var(_, hir_id) => {
+                let var = self.fresh_var();
+                self.env.insert(hir_id, var);
+                Ok(var)
             }
-        )
+            PatKind::Lit(l) => Ok(self.type_from_lit(l, pat.span)),
+            PatKind::Ann(pat, typ) => {
+                self.check_pat(pat, *typ)?;
+                Ok(*typ)
+            }
+            PatKind::Tuple(pats) => {
+                Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span))
+            }
+            PatKind::Constructor(cons, args) => {
+                // TODO. well-formed check for cons_t
+                let cons_typ = todo!(); //self.lookup_type(self.arena.path(cons, []))?;
+
+                let cons_typ = self.instantiate(cons_typ);
+                if args.is_empty() {
+                    Ok(cons_typ)
+                } else {
+                    let arg_typs = self.infer_pats(args)?;
+                    let ret_typ = self.fresh_var();
+
+                    self.constrain(Ty::n_arrow(self.arena, arg_typs, ret_typ), cons_typ);
+                    Ok(ret_typ)
+                }
+            }
+            PatKind::Or(_pats) => todo!("implement or patterns"),
+        })
     }
 
     /// Check an expression against a type.

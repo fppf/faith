@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use log::Level;
 use span::diag;
 
 #[derive(PartialEq)]
@@ -18,15 +17,15 @@ pub enum Source {
 #[derive(PartialEq)]
 pub enum Mode {
     Test,
-    Real,
+    Real(Level),
 }
 
-pub use log::get_buffer;
+pub use log::{Level, get_buffer};
 
-pub fn run(src: Source, mode: Mode, stop_after: Pass) {
+pub fn run(src: Source, mode: Mode, stop_after: Pass) -> bool {
     match mode {
         Mode::Test => log::init(Level::Trace),
-        Mode::Real => log::init(Level::Warn),
+        Mode::Real(lvl) => log::init(lvl),
     };
 
     match run_passes(src, stop_after) {
@@ -34,9 +33,7 @@ pub fn run(src: Source, mode: Mode, stop_after: Pass) {
         Err(e) => diag::emit(e),
     }
 
-    if diag::report(mode == Mode::Test) {
-        std::process::exit(1);
-    }
+    diag::report(mode == Mode::Test)
 }
 
 fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {

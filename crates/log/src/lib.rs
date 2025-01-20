@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     fmt,
+    str::FromStr,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
@@ -29,6 +30,28 @@ pub enum Level {
     Info,
     Debug,
     Trace,
+}
+
+pub struct ParseLevelError;
+
+impl FromStr for Level {
+    type Err = ParseLevelError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("error") {
+            Ok(Level::Error)
+        } else if s.eq_ignore_ascii_case("warn") {
+            Ok(Level::Warn)
+        } else if s.eq_ignore_ascii_case("info") {
+            Ok(Level::Info)
+        } else if s.eq_ignore_ascii_case("debug") {
+            Ok(Level::Debug)
+        } else if s.eq_ignore_ascii_case("trace") {
+            Ok(Level::Trace)
+        } else {
+            Err(ParseLevelError)
+        }
+    }
 }
 
 pub fn block_log<F, R>(f: F) -> R
