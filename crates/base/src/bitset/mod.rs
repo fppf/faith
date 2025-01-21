@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::index::Idx;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 type Word = u64;
 const WORD_BYTES: usize = mem::size_of::<Word>();

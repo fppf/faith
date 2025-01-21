@@ -6,8 +6,8 @@ use std::{
 use base::pp::*;
 
 use crate::{
-    CompUnit, Expr, ExprArg, ExprKind, HirId, Ident, Items, Lambda, Lit, Pat, PatKind, Path,
-    Program, Ty, TyKind, WebId, NO_WEB,
+    CompUnit, Expr, ExprArg, ExprKind, HirId, Ident, Items, Lambda, Lit, NO_WEB, Pat, PatKind,
+    Path, Program, Ty, TyKind, WebId,
 };
 
 impl fmt::Display for WebId {

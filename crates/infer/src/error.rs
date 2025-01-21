@@ -3,8 +3,8 @@ use std::fmt;
 use base::pp::FormatIterator;
 use hir::*;
 use span::{
-    diag::{Diagnostic, Label, Level},
     Span,
+    diag::{Diagnostic, Label, Level},
 };
 
 use crate::constraint::Constraint;

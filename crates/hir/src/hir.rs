@@ -9,7 +9,7 @@ use base::{
 };
 use span::{Ident, SourceId, Sp, Span, Sym};
 
-pub use crate::{path::*, typ::*, Arena};
+pub use crate::{Arena, path::*, typ::*};
 
 base::newtype_index! {
     pub struct HirId {}

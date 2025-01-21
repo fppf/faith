@@ -4,18 +4,18 @@ use std::{
 };
 
 use base::{
-    hash::{scoped::ScopedMap, Map, Set},
+    hash::{Map, Set, scoped::ScopedMap},
     index::IndexVec,
 };
 use span::{
-    diag::{Diagnostic, Label, Level},
     Ident, SourceId, Sp, Span, Sym,
+    diag::{Diagnostic, Label, Level},
 };
 use syntax::ast;
 
 use crate::{
-    hir::{self, Ty},
     Arena, Constructor, DefKind, HirId, HirMap, Res, TypeDecl, Value, Visitor,
+    hir::{self, Ty},
 };
 
 pub fn lower_program_in<'ast, 'hir>(
@@ -545,15 +545,12 @@ impl<'hir> LoweringContext<'hir> {
                     let cons_hir_id = self.next_hir_id();
                     constructors.insert(cons_hir_id);
                     self.current_module_mut().values.insert(id, cons_hir_id);
-                    self.constructors.insert(
-                        cons_hir_id,
-                        Constructor {
-                            id,
-                            typ: cons_typ,
-                            arity: new_args.len(),
-                            decl: hir_id,
-                        },
-                    );
+                    self.constructors.insert(cons_hir_id, Constructor {
+                        id,
+                        typ: cons_typ,
+                        arity: new_args.len(),
+                        decl: hir_id,
+                    });
                 }
                 hir::TypeDeclKind::Variant(self.arena.alloc(constructors))
             }

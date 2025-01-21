@@ -8,8 +8,8 @@ use infer::InferData;
 use span::{SourceId, Span, Sym};
 
 use crate::{
+    MAIN_LABEL, Module,
     mir::{self, Label},
-    Module, MAIN_LABEL,
 };
 
 pub fn lower<'hir>(

@@ -3,9 +3,8 @@ use std::{cell::RefCell, io};
 use codespan_reporting::{
     diagnostic::{self, Severity},
     term::{
-        emit as term_emit,
+        Config, emit as term_emit,
         termcolor::{ColorChoice, ColorSpec, NoColor, StandardStream, WriteColor},
-        Config,
     },
 };
 

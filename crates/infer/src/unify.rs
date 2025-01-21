@@ -183,19 +183,11 @@ impl<K: UnifyKey> UnificationTable<K> {
             // this may not be the optimal choice.
             let new_rank = if new_root == key_a {
                 debug_assert_eq!(redirected, key_b);
-                if rank_a > rank_b {
-                    rank_a
-                } else {
-                    rank_b + 1
-                }
+                if rank_a > rank_b { rank_a } else { rank_b + 1 }
             } else {
                 debug_assert_eq!(new_root, key_b);
                 debug_assert_eq!(redirected, key_a);
-                if rank_b > rank_a {
-                    rank_b
-                } else {
-                    rank_a + 1
-                }
+                if rank_b > rank_a { rank_b } else { rank_a + 1 }
             };
             self.redirect_root(new_rank, redirected, new_root, new_value);
         } else if rank_a > rank_b {

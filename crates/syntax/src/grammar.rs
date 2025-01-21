@@ -58,13 +58,10 @@ fn comp_unit_eof<'ast>(
     let m = p.start();
     while p.eat(NEWLINE) {}
     if !eof || p.at(EOF) {
-        Ok(alloc!(
-            p,
-            CompUnit {
-                source_id,
-                items: alloc_iter!(p, items),
-            }
-        ))
+        Ok(alloc!(p, CompUnit {
+            source_id,
+            items: alloc_iter!(p, items),
+        }))
     } else {
         while !p.at(EOF) {
             p.bump_any();
@@ -85,7 +82,7 @@ fn lit(p: &mut Parser<'_>) -> ParseResult<Sp<Lit>> {
                 return Err(ParseError::new(
                     "string literal is not terminated by '\"'",
                     p.end(m),
-                ))
+                ));
             }
         },
         _ => return Err(ParseError::new("expected a literal", p.current().span)),
@@ -153,7 +150,7 @@ fn ident_or_infix(p: &mut Parser<'_>) -> ParseResult<(Ident, IdentKind)> {
             return Err(ParseError::new(
                 "expected either an identifier or a parenthesized infix operator",
                 p.current().span,
-            ))
+            ));
         }
     })
 }
@@ -439,13 +436,10 @@ fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>
         lhs = Sp::new(
             Expr::App(
                 alloc!(p, op),
-                alloc_iter!(
-                    p,
-                    [
-                        Sp::new(ExprArg::Expr(lhs), lhs_span),
-                        Sp::new(ExprArg::Expr(rhs), rhs_span),
-                    ]
-                ),
+                alloc_iter!(p, [
+                    Sp::new(ExprArg::Expr(lhs), lhs_span),
+                    Sp::new(ExprArg::Expr(rhs), rhs_span),
+                ]),
             ),
             p.end(m),
         );
@@ -567,7 +561,10 @@ fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
             match kind {
                 PathKind::Ident(IdentKind::Infix)
                 | PathKind::Path(IdentKind::Var | IdentKind::Infix) => {
-                    return Err(ParseError::new("pattern paths must be either fresh variable bindings or paths to constructors", path.span()));
+                    return Err(ParseError::new(
+                        "pattern paths must be either fresh variable bindings or paths to constructors",
+                        path.span(),
+                    ));
                 }
                 PathKind::Ident(IdentKind::Var) => {
                     return Ok(Sp::new(Pat::Var(path.leaf()), path.span()));

@@ -7,7 +7,7 @@ use base::{
 };
 use span::{Ident, Sp, Span};
 
-use crate::{Arena, Path, WebId, NO_WEB};
+use crate::{Arena, NO_WEB, Path, WebId};
 
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.

@@ -1,8 +1,8 @@
 use std::cell::Cell;
 
 use span::{
-    diag::{Diagnostic, Label, Level},
     BytePos, Span,
+    diag::{Diagnostic, Label, Level},
 };
 
 use crate::Arena;

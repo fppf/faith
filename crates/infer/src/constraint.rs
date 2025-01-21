@@ -3,7 +3,7 @@ use std::{fmt, hash::Hash, marker::PhantomData};
 use base::hash::{IndexSet, Map};
 use hir::*;
 
-use crate::{error::UnifyError, substitution::Substitution, TypeChecker};
+use crate::{TypeChecker, error::UnifyError, substitution::Substitution};
 
 pub fn solve<'a, T, U>(
     unifier: &mut U,

@@ -12,8 +12,8 @@ use base::{
 use hir::{Folder, Substitutable, Visitor};
 
 use crate::{
-    unify::{UnificationTable, UnifyKey, UnifyValue},
     Arena,
+    unify::{UnificationTable, UnifyKey, UnifyValue},
 };
 
 base::newtype_index! {
