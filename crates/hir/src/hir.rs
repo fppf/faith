@@ -50,6 +50,7 @@ pub struct CompUnit<'hir> {
 pub struct Value<'hir> {
     pub hir_id: HirId,
     pub expr: Expr<'hir>,
+    pub recursive: bool,
     pub typ: Option<Ty<'hir>>,
 }
 
@@ -213,4 +214,46 @@ pub struct Items<'hir> {
     pub modules: Map<Ident, &'hir ModExpr<'hir>>,
 
     pub type_groups: HirMap<HirSet>,
+}
+
+impl<'hir> Expr<'hir> {
+    pub fn visit_with<V>(&self, v: &mut V)
+    where
+        V: Visitor<Self>,
+    {
+        match *self.kind() {
+            ExprKind::Path(_)
+            | ExprKind::Constructor(_)
+            | ExprKind::External(_)
+            | ExprKind::Lit(_) => (),
+            ExprKind::Ann(e, _) => v.visit(e),
+            ExprKind::Tuple(es) | ExprKind::Vector(es) => es.iter().for_each(|&e| v.visit(e)),
+            ExprKind::Lambda(l) => v.visit(l.body),
+            ExprKind::App(_, e, args) => {
+                v.visit(e);
+                args.iter().for_each(|arg| {
+                    if let ExprArg::Expr(e) = arg {
+                        v.visit(*e);
+                    }
+                });
+            }
+            ExprKind::If(c, e1, e2) => {
+                v.visit(c);
+                v.visit(e1);
+                v.visit(e2);
+            }
+            ExprKind::Let(binds, e) => {
+                binds.iter().for_each(|&(_, e)| v.visit(e));
+                v.visit(e);
+            }
+            ExprKind::Case(e, arms) => {
+                v.visit(e);
+                arms.iter().for_each(|&(_, e)| v.visit(e));
+            }
+            ExprKind::Seq(e1, e2) => {
+                v.visit(e1);
+                v.visit(e2);
+            }
+        }
+    }
 }

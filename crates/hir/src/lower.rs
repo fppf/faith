@@ -33,6 +33,7 @@ enum LowerError {
     Resolve(String, Span),
     DuplicateLocalBinding(Sym, Span, Vec<Span>),
     DuplicateItemBinding(Namespace, Sym, Span, Span),
+    RecursiveValue(Sym, Span),
     InvalidInt(Span, std::num::ParseIntError),
 }
 
@@ -64,6 +65,9 @@ impl From<LowerError> for Diagnostic {
                         Label::new(other_span, "first defined here"),
                     ])
             }
+            LowerError::RecursiveValue(sym, span) => Diagnostic::new(Level::Error)
+                .with_message(format!("definition of `{sym}` produces a recursive value"))
+                .with_labels(vec![Label::new(span, "")]),
             LowerError::InvalidInt(span, e) => Diagnostic::new(Level::Error)
                 .with_message("parsed integer is invalid")
                 .with_labels(vec![Label::new(span, e.to_string())]),
@@ -352,12 +356,54 @@ impl<'hir> LoweringContext<'hir> {
 
                 // Insert hir_id into scope before lowering value
                 // to allow recursive functions.
-                // TODO. Guard against recursive values,
-                //       i.e. val x = x
                 self.current_module_mut().values.insert(id, hir_id);
+
+                let expr = self.lower_expr(e)?;
+
+                struct RecursiveVisitor {
+                    hir_id: HirId,
+                    recursive_function: bool,
+                    recursive_value: bool,
+                }
+
+                impl<'a> Visitor<hir::Expr<'a>> for RecursiveVisitor {
+                    fn visit(&mut self, expr: hir::Expr<'a>) {
+                        use hir::ExprKind;
+                        match expr.kind() {
+                            ExprKind::Path(p) if p.res().hir_id() == self.hir_id => {
+                                self.recursive_value = true;
+                                return;
+                            }
+                            ExprKind::App(_, e, args) => {
+                                if let ExprKind::Path(p) = e.kind()
+                                    && p.res().hir_id() == self.hir_id
+                                {
+                                    self.recursive_function = true;
+                                    return;
+                                }
+                            }
+                            _ => (),
+                        }
+                        expr.visit_with(self);
+                    }
+                }
+
+                let mut recursive_visitor = RecursiveVisitor {
+                    hir_id,
+                    recursive_function: false,
+                    recursive_value: false,
+                };
+                recursive_visitor.visit(expr);
+
+                // Guard against recursive values, i.e. val x = x
+                if recursive_visitor.recursive_value {
+                    return Err(LowerError::RecursiveValue(id.sym, id.span));
+                }
+
                 let value = Value {
                     hir_id,
-                    expr: self.lower_expr(e)?,
+                    recursive: recursive_visitor.recursive_function,
+                    expr,
                     typ: match typ {
                         Some(typ) => Some(*self.lower_type(typ)?),
                         None => None,
@@ -372,6 +418,7 @@ impl<'hir> LoweringContext<'hir> {
                 self.current_module_mut().values.insert(id, hir_id);
                 let value = Value {
                     hir_id,
+                    recursive: false,
                     expr: self.arena.expr(hir::ExprKind::External(s.sym), s.span),
                     typ: Some(*self.lower_type(typ)?),
                 };

@@ -586,6 +586,13 @@ impl<'hir> TypeChecker<'hir> {
             Some(typ) => Ok(*typ),
             None => {
                 let value = self.program.values.get(&hir_id).unwrap();
+
+                if value.recursive {
+                    let fn_var = self.fresh_var();
+                    self.env.insert(hir_id, fn_var);
+                    return Ok(fn_var);
+                }
+
                 let typ = match value.typ {
                     Some(typ) => {
                         self.check_expr_poly(value.expr, typ)?;

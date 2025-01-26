@@ -227,13 +227,13 @@ impl fmt::Display for Kind {
 }
 
 pub trait Visitor<T>: Sized {
-    fn visit(&mut self, typ: T);
+    fn visit(&mut self, t: T);
 }
 
 pub trait Folder<'hir, T>: Sized {
     fn arena(&self) -> &'hir Arena<'hir>;
 
-    fn fold(&mut self, typ: T) -> T;
+    fn fold(&mut self, t: T) -> T;
 }
 
 pub trait Substitutable<'hir>: Copy + PartialEq + fmt::Display {
