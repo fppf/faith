@@ -54,16 +54,6 @@ impl FromStr for Level {
     }
 }
 
-pub fn block_log<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    block_in();
-    let res = f();
-    block_out();
-    res
-}
-
 pub fn block_in() {
     BLOCK_LEVEL.fetch_add(2, SeqCst);
 }
@@ -139,24 +129,5 @@ macro_rules! debug {
 macro_rules! trace {
     ($($arg:tt)+) => {
         $crate::log!($crate::Level::Trace, $($arg)+);
-    };
-}
-
-#[macro_export]
-macro_rules! block {
-    ($e:expr) => {
-        if cfg!(debug_assertions) {
-            $crate::block_log(|| $e)
-        } else {
-            $e
-        }
-    };
-    ($target:expr, $e:expr) => {
-        if cfg!(debug_assertions) {
-            log::trace!($target);
-            $crate::block_log(|| $e)
-        } else {
-            $e
-        }
     };
 }

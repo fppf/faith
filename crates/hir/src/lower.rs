@@ -342,7 +342,6 @@ impl<'hir> LoweringContext<'hir> {
         seen: &mut Seen,
         items: &mut hir::Items<'hir>,
     ) -> Result<(), LowerError> {
-        log::trace!("lower_item {:?}", item);
         match **item {
             ast::Item::Type(decls) => {
                 self.lower_type_decl_group(decls, seen, items)?;

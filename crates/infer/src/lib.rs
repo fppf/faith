@@ -25,7 +25,7 @@ pub fn infer_program_in<'hir>(
         .map_err(Diagnostic::from)
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct InferData<'hir> {
     pub expr_types: Map<Expr<'hir>, Ty<'hir>>,
     pub adts: Map<Ident, Ty<'hir>>,
@@ -142,7 +142,6 @@ impl<'hir> TypeChecker<'hir> {
                 }
                 log::block_out();
                 log::trace!("}}");
-                //log::trace!("{:?}", specs);
                 Ok(())
             }
         }
@@ -150,12 +149,7 @@ impl<'hir> TypeChecker<'hir> {
 
     fn infer_decl_group(&mut self, group: TypeDeclGroup<'hir>) -> Result<(), InferError<'hir>> {
         log::trace!("infer_decl_group");
-
-        Ok(())
-    }
-
-    fn infer_item(&mut self) -> Result<(), InferError<'hir>> {
-        Ok(())
+        todo!()
     }
 
     fn type_from_lit(&self, lit: hir::Lit, span: Span) -> Ty<'hir> {
@@ -169,7 +163,6 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
-        log::trace!("constrain {lhs} ~ {rhs}");
         self.constraints.push(Constraint::equal(lhs, rhs));
     }
 
@@ -181,7 +174,6 @@ impl<'hir> TypeChecker<'hir> {
     ///
     /// For example, `generalize('1 -> '1) = 'a -> 'a`.
     fn generalize(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
-        log::trace!("generalize {typ}");
         self.type_var_src.reset();
         let typ = self.subs.apply(typ);
         let free_vars = typ.uni_vars();
@@ -199,7 +191,6 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn instantiate(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
-        log::trace!("instantiate {typ}");
         let subs = typ
             .type_vars()
             .iter()
@@ -263,32 +254,29 @@ impl<'hir> TypeChecker<'hir> {
         pat: &'hir Pat<'hir>,
         expected: Ty<'hir>,
     ) -> Result<(), InferError<'hir>> {
-        log::block!(
-            "check_pat {pat} :: {expected}",
-            match (pat.kind, expected.kind()) {
-                (PatKind::Wild, _) => Ok(()),
-                (PatKind::Var(_, hir_id), _) => {
-                    self.env.insert(hir_id, expected);
-                    Ok(())
-                }
-                (PatKind::Lit(l), _) if self.type_from_lit(l, pat.span) == expected => Ok(()),
-                (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {
-                    if ps.len() == ts.len() {
-                        for (p, &t) in ps.iter().zip(*ts) {
-                            self.check_pat(p, t)?;
-                        }
-                        Ok(())
-                    } else {
-                        Err(InferError::PatTupleLength(pat.span, ps.len(), ts.len()))
+        match (pat.kind, expected.kind()) {
+            (PatKind::Wild, _) => Ok(()),
+            (PatKind::Var(_, hir_id), _) => {
+                self.env.insert(hir_id, expected);
+                Ok(())
+            }
+            (PatKind::Lit(l), _) if self.type_from_lit(l, pat.span) == expected => Ok(()),
+            (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {
+                if ps.len() == ts.len() {
+                    for (p, &t) in ps.iter().zip(*ts) {
+                        self.check_pat(p, t)?;
                     }
-                }
-                (_, _) => {
-                    let typ = self.infer_pat(pat)?;
-                    self.constrain(typ, expected);
                     Ok(())
+                } else {
+                    Err(InferError::PatTupleLength(pat.span, ps.len(), ts.len()))
                 }
             }
-        )
+            (_, _) => {
+                let typ = self.infer_pat(pat)?;
+                self.constrain(typ, expected);
+                Ok(())
+            }
+        }
     }
 
     fn infer_pats(&mut self, pats: &'hir [Pat<'hir>]) -> Result<Vec<Ty<'hir>>, InferError<'hir>> {
@@ -301,7 +289,7 @@ impl<'hir> TypeChecker<'hir> {
 
     /// Infer a type for a pattern.
     fn infer_pat(&mut self, pat: &'hir Pat<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        log::block!("infer_pat {pat}", match pat.kind {
+        match pat.kind {
             PatKind::Wild => Ok(self.fresh_var()),
             PatKind::Var(_, hir_id) => {
                 let var = self.fresh_var();
@@ -313,9 +301,7 @@ impl<'hir> TypeChecker<'hir> {
                 self.check_pat(pat, *typ)?;
                 Ok(*typ)
             }
-            PatKind::Tuple(pats) => {
-                Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span))
-            }
+            PatKind::Tuple(pats) => Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span)),
             PatKind::Constructor(cons, args) => {
                 // TODO. well-formed check for cons_t
                 let cons_typ = todo!(); //self.lookup_type(self.arena.path(cons, []))?;
@@ -332,13 +318,15 @@ impl<'hir> TypeChecker<'hir> {
                 }
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
-        })
+        }
     }
 
     /// Check an expression against a type.
     fn check_expr(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
         match (*expr.kind(), expected.kind()) {
-            (ExprKind::App(..) | ExprKind::Path(_), _) => self.check_app(expr, expected),
+            (ExprKind::App(..) | ExprKind::Path(_), _) | (ExprKind::Constructor(_), _) => {
+                self.check_app(expr, expected)
+            }
             (ExprKind::Lit(l), bt @ TyKind::Base(_))
                 if self.type_from_lit(l, expr.span()).kind() == bt =>
             {
@@ -395,24 +383,22 @@ impl<'hir> TypeChecker<'hir> {
     /// Check an application expression against a type. Refer to note in `infer_app` about what
     /// qualifies as an application.
     fn check_app(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
-        log::block!("check_app {expr} :: {expected}", {
-            let (head, args) = self.split_app(expr);
-            let head_typ = self.infer_app_head(head)?;
-            let head_typ = self.instantiate(head_typ);
+        let (head, args) = self.split_app(expr);
+        let head_typ = self.infer_app_head(head)?;
+        let head_typ = self.instantiate(head_typ);
 
-            let mut typ = head_typ;
-            for arg in args {
-                if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
-                    self.check_expr_arg(*arg, arg_typ)?;
-                    typ = ret_typ;
-                } else {
-                    break;
-                }
+        let mut typ = head_typ;
+        for arg in args {
+            if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
+                self.check_expr_arg(*arg, arg_typ)?;
+                typ = ret_typ;
+            } else {
+                break;
             }
+        }
 
-            self.constrain(typ, expected);
-            Ok(())
-        })
+        self.constrain(typ, expected);
+        Ok(())
     }
 
     fn check_expr_arg(
@@ -569,22 +555,20 @@ impl<'hir> TypeChecker<'hir> {
     /// NB. Here, an application can be either a function call (such as `(f a b ...)`) or simply
     /// a "0-arity" application, like a variable or path.
     fn infer_app(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        log::block!("infer_app {expr}", {
-            let (head, args) = self.split_app(expr);
-            let head_typ = self.infer_app_head(head)?;
-            let head_typ = self.instantiate(head_typ);
+        let (head, args) = self.split_app(expr);
+        let head_typ = self.infer_app_head(head)?;
+        let head_typ = self.instantiate(head_typ);
 
-            let mut typ = head_typ;
-            for arg in args {
-                if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
-                    self.check_expr_arg(*arg, arg_typ)?;
-                    typ = ret_typ;
-                } else {
-                    break;
-                }
+        let mut typ = head_typ;
+        for arg in args {
+            if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
+                self.check_expr_arg(*arg, arg_typ)?;
+                typ = ret_typ;
+            } else {
+                break;
             }
-            Ok(typ)
-        })
+        }
+        Ok(typ)
     }
 
     /// Infer the head of an application; really just a wrapper around `infer_expr`.
@@ -616,17 +600,13 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn solve_current(&mut self) -> Result<(), InferError<'hir>> {
-        log::block!("solve_current", {
-            let constraints: Vec<_> = self.constraints.drain(..).collect();
-            let residual =
-                constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
-            if residual.is_empty() {
-                Ok(())
-            } else {
-                log::trace!("residual: {}", residual.iter().format(", "));
-                Err(InferError::ResidualConstraints(residual))
-            }
-        })
+        let constraints: Vec<_> = self.constraints.drain(..).collect();
+        let residual = constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
+        if residual.is_empty() {
+            Ok(())
+        } else {
+            Err(InferError::ResidualConstraints(residual))
+        }
     }
 
     fn infer_solve_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {

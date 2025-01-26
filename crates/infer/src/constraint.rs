@@ -337,20 +337,18 @@ where
     where
         U: Unifier<'a, T>,
     {
-        log::block!("solve", {
-            while self.step(unifier.subs()) {
-                // step
-            }
+        while self.step(unifier.subs()) {
+            // step
+        }
 
-            // We have no more possible reactions between constraints;
-            // let's try to unify the inerts.
-            for inert in &self.inert_set {
-                unifier.try_unify(inert.lhs, inert.rhs)?;
-            }
+        // We have no more possible reactions between constraints;
+        // let's try to unify the inerts.
+        for inert in &self.inert_set {
+            unifier.try_unify(inert.lhs, inert.rhs)?;
+        }
 
-            // Residual constraints.
-            Ok(self.work_list.into_constraints())
-        })
+        // Residual constraints.
+        Ok(self.work_list.into_constraints())
     }
 
     fn step(&mut self, subs: &Substitution<'a, T>) -> bool {

@@ -206,7 +206,7 @@ impl SourceMap {
             path: path.clone(),
             err,
         })?;
-        log::info!("loading file '{}'", path.display());
+        log::info!("loading '{}'", path.display());
         let src = fs::read_to_string(&path).map_err(|err| LoadError {
             path: path.clone(),
             err,
