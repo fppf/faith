@@ -14,7 +14,6 @@ pub enum InferError<'hir> {
     TypeUnifyFail(UnifyError<'hir, Ty<'hir>>),
     TypeMismatch(Ty<'hir>, Ty<'hir>),
     SpecMismatch(Span, Span),
-    ModTypeMismatch(Span, Span),
     MissingItems(Span, Span, Vec<Span>),
     ExprTupleLength(Span, usize, usize),
     PatTupleLength(Span, usize, usize),
@@ -42,12 +41,6 @@ impl From<InferError<'_>> for Diagnostic {
                 .with_labels(vec![
                     Label::new(s1, "this specification"),
                     Label::new(s2, "does not match specification originating from here"),
-                ]),
-            InferError::ModTypeMismatch(mt1, mt2) => Diagnostic::new(Level::Error)
-                .with_message("module types do not match")
-                .with_labels(vec![
-                    Label::new(mt1, "module type originating from here"),
-                    Label::new(mt2, "does not match module type originating from here"),
                 ]),
             InferError::MissingItems(mt1, mt2, _items) => Diagnostic::new(Level::Error)
                 .with_message("missing items for module type")
