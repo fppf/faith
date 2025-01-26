@@ -98,7 +98,7 @@ infer_ok! {
 infer_ok! {
     module_empty,
     r"
-        mod m = {} : {}
+        mod m = {}
     ",
     "()",
     "()"
@@ -109,8 +109,6 @@ infer_ok! {
     r"
         mod m = {
             val x = ()
-        } : {
-            val x : ()
         }
     ",
     "m.x",
@@ -125,23 +123,8 @@ infer_ok! {
                val id x = x       
            }
            val y = n.id
-       } : {
-           val y : 'a -> 'a
        }
     ",
     "m.y",
     "'a -> 'a"
-}
-
-infer_ok! {
-    module_restriction,
-    r"
-        mod m = {
-            val id x = x
-        } : {
-            val id : () -> ()
-        }
-    ",
-    "m.id",
-    "() -> ()"
 }

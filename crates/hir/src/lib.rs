@@ -33,7 +33,6 @@ pub fn parse_and_lower_str_program_in<'hir>(
 base::declare_arena!('hir, [
     set: HirSet,
     items: Items<'hir>,
-    specs: Specs<'hir>,
     program: Program<'hir>,
 ]);
 

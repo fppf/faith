@@ -870,26 +870,10 @@ fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
 fn struct_item_mod<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let m = p.start();
     p.bump(KW_MOD);
-    if p.eat(KW_TYPE) {
-        let id = ident_lower(p)?;
-        p.expect(EQUAL)?;
-        let mt = mod_type(p)?;
-        Ok(Sp::new(Item::ModType(id, alloc!(p, mt)), p.end(m)))
-    } else {
-        let id = ident_lower(p)?;
-        if p.eat(COLON) {
-            let mt = mod_type(p)?;
-            p.expect(EQUAL)?;
-            let me = mod_expr(p)?;
-            let span = mt.span().merge(me.span());
-            let ann_me = Sp::new(ModExpr::Ann(alloc!(p, me), alloc!(p, mt)), span);
-            Ok(Sp::new(Item::Mod(id, alloc!(p, ann_me)), p.end(m)))
-        } else {
-            p.expect(EQUAL)?;
-            let me = mod_expr(p)?;
-            Ok(Sp::new(Item::Mod(id, alloc!(p, me)), p.end(m)))
-        }
-    }
+    let id = ident_lower(p)?;
+    p.expect(EQUAL)?;
+    let me = mod_expr(p)?;
+    Ok(Sp::new(Item::Mod(id, alloc!(p, me)), p.end(m)))
 }
 
 fn lit_str(p: &mut Parser<'_>) -> ParseResult<Ident> {
@@ -926,22 +910,11 @@ pub fn mod_expr<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
         IDENT { .. } => mod_expr_path(p),
         L_BRACE => mod_expr_struct(p),
         KW_IMPORT => mod_expr_import(p),
-        BACKSLASH => mod_expr_functor(p),
         L_PAREN => {
-            let m = p.start();
             p.bump(L_PAREN);
             let me = mod_expr(p)?;
-            if p.eat(COLON) {
-                let mt = mod_type(p)?;
-                p.expect(R_PAREN)?;
-                Ok(Sp::new(
-                    ModExpr::Ann(alloc!(p, me), alloc!(p, mt)),
-                    p.end(m),
-                ))
-            } else {
-                p.expect(R_PAREN)?;
-                Ok(me)
-            }
+            p.expect(R_PAREN)?;
+            Ok(me)
         }
         _ => Err(ParseError::new("expected module", p.current().span)),
     }
@@ -950,18 +923,7 @@ pub fn mod_expr<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
 fn mod_expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
     let m = p.start();
     let path = path_without_infix(p)?;
-    if p.eat(L_PAREN) {
-        let arg = mod_expr(p)?;
-        p.expect(R_PAREN)?;
-        let span = path.span();
-        let f = Sp::new(ModExpr::Path(path), span);
-        Ok(Sp::new(
-            ModExpr::App(alloc!(p, f), alloc!(p, arg)),
-            p.end(m),
-        ))
-    } else {
-        Ok(Sp::new(ModExpr::Path(path), p.end(m)))
-    }
+    Ok(Sp::new(ModExpr::Path(path), p.end(m)))
 }
 
 fn mod_expr_struct<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
@@ -973,16 +935,7 @@ fn mod_expr_struct<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>>
     }
     let span = p.end(m);
     p.expect(R_BRACE)?;
-    let me = Sp::new(ModExpr::Struct(alloc_iter!(p, items)), span);
-    if p.eat(COLON) {
-        let mt = mod_type(p)?;
-        Ok(Sp::new(
-            ModExpr::Ann(alloc!(p, me), alloc!(p, mt)),
-            p.end(m),
-        ))
-    } else {
-        Ok(me)
-    }
+    Ok(Sp::new(ModExpr::Struct(alloc_iter!(p, items)), span))
 }
 
 fn mod_expr_import<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
@@ -990,97 +943,4 @@ fn mod_expr_import<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>>
     p.expect(KW_IMPORT)?;
     let path_str = lit_str(p)?;
     Ok(Sp::new(ModExpr::Import(path_str), p.end(m)))
-}
-
-fn mod_expr_functor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
-    let m = p.start();
-    p.bump(BACKSLASH);
-    let id = ident_lower(p)?;
-    p.expect(COLON)?;
-    let mt = mod_type(p)?;
-    p.expect(ARROW)?;
-    let body = mod_expr(p)?;
-    Ok(Sp::new(
-        ModExpr::Functor(id, alloc!(p, mt), alloc!(p, body)),
-        p.end(m),
-    ))
-}
-
-fn mod_type<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModType<'ast>>> {
-    match p.current().kind {
-        IDENT { .. } => mod_type_path(p),
-        L_BRACE => mod_type_sig(p),
-        _ => Err(ParseError::new("expected module type", p.current().span)),
-    }
-}
-
-fn mod_type_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModType<'ast>>> {
-    let m = p.start();
-    let id = ident_lower(p)?;
-    if p.eat(COLON) {
-        let from = mod_type(p)?;
-        p.expect(ARROW)?;
-        let to = mod_type(p)?;
-        Ok(Sp::new(
-            ModType::Arrow(id, alloc!(p, from), alloc!(p, to)),
-            p.end(m),
-        ))
-    } else {
-        let path = path_without_infix(p)?;
-        Ok(Sp::new(ModType::Path(path), p.end(m)))
-    }
-}
-
-fn mod_type_sig<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModType<'ast>>> {
-    let m = p.start();
-    p.bump(L_BRACE);
-    let mut items = Vec::new();
-    while !p.at(EOF) && !p.at(R_BRACE) {
-        items.push(spec(p)?);
-    }
-    let span = p.end(m);
-    p.expect(R_BRACE)?;
-    Ok(Sp::new(ModType::Sig(alloc_iter!(p, items)), span))
-}
-
-fn spec<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Spec<'ast>>> {
-    match p.current().kind {
-        KW_TYPE => spec_type(p),
-        KW_VAL => spec_val(p),
-        KW_MOD => spec_mod(p),
-        _ => Err(ParseError::new("expected signature item", p.current().span)),
-    }
-}
-
-fn spec_type<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Spec<'ast>>> {
-    let m = p.start();
-    let mut decl_group = vec![type_decl(p)?];
-    while !p.at(EOF) && p.eat(KW_AND) {
-        decl_group.push(type_decl(p)?);
-    }
-    Ok(Sp::new(Spec::Type(alloc_iter!(p, decl_group)), p.end(m)))
-}
-
-fn spec_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Spec<'ast>>> {
-    let m = p.start();
-    p.bump(KW_VAL);
-    let (id, kind) = ident_or_infix(p)?;
-    if kind == IdentKind::Cons {
-        return Err(ParseError::new(
-            "expected lowercase identifier or parenthesized infix operator for value name",
-            id.span,
-        ));
-    }
-    p.expect(COLON)?;
-    let t = type_(p)?;
-    Ok(Sp::new(Spec::Val(id, alloc!(p, t)), p.end(m)))
-}
-
-fn spec_mod<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Spec<'ast>>> {
-    let m = p.start();
-    p.bump(KW_MOD);
-    let id = ident_lower(p)?;
-    p.expect(COLON)?;
-    let mt = mod_type(p)?;
-    Ok(Sp::new(Spec::Mod(id, alloc!(p, mt)), p.end(m)))
 }

@@ -97,10 +97,7 @@ impl<'hir> TypeChecker<'hir> {
         Ok(self.infer_data)
     }
 
-    fn infer_comp_unit(
-        &mut self,
-        unit: &'hir CompUnit<'hir>,
-    ) -> Result<&'hir ModType<'hir>, InferError<'hir>> {
+    fn infer_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) -> Result<(), InferError<'hir>> {
         let mexpr = self.arena.alloc(ModExpr {
             kind: ModExprKind::Struct(unit.items),
             span: Span::dummy(),
@@ -108,11 +105,8 @@ impl<'hir> TypeChecker<'hir> {
         self.infer_mod_expr(mexpr)
     }
 
-    fn infer_mod_expr(
-        &mut self,
-        mexpr: &'hir ModExpr<'hir>,
-    ) -> Result<&'hir ModType<'hir>, InferError<'hir>> {
-        let kind = match mexpr.kind {
+    fn infer_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) -> Result<(), InferError<'hir>> {
+        match mexpr.kind {
             ModExprKind::Import(source_id) => {
                 todo!()
                 // if let Some(mtyp) = self.env.comp_units.get(&source_id) {
@@ -132,7 +126,6 @@ impl<'hir> TypeChecker<'hir> {
                 todo!()
             }
             ModExprKind::Struct(items) => {
-                let mut specs = Specs::default();
                 log::trace!("{{");
                 log::block_in();
                 for (&id, value) in &items.values {
@@ -144,7 +137,6 @@ impl<'hir> TypeChecker<'hir> {
                         None => self.infer_solve_expr(value.expr)?,
                     };
                     log::trace!("{id} : {typ}");
-                    specs.values.insert(id, typ);
                 }
                 for (id, mexpr) in &items.modules {
                     log::trace!("mod {id}");
@@ -153,77 +145,8 @@ impl<'hir> TypeChecker<'hir> {
                 log::block_out();
                 log::trace!("}}");
                 //log::trace!("{:?}", specs);
-                ModTypeKind::Sig(self.arena.alloc(specs))
+                Ok(())
             }
-            ModExprKind::Functor(id, mt, body) => {
-                //self.env.insert_mod_type(*id, mt);
-                let body_mt = self.infer_mod_expr(body)?;
-                //self.env.remove_mod_type(*id);
-                ModTypeKind::Arrow(id, mt, body_mt)
-            }
-            // TODO. Note for when I actually implement functors... :)
-            //
-            // Functor types are dependent, so the result type of a functor may refer
-            // to the parameter name. Following the standard elimination rule for dependent
-            // function types, we replace the parameter name by the actual argument to
-            // obtain the type of the application. In the case where the argument is a
-            // module path, there are no issues. However, we choose to reject non-path
-            // module expressions as arguments, since we can create ill-formed module
-            // accesses. We could have a desugaring phase which lifts non-paths into
-            // bindings which are then fed into the application, but for simplicity we
-            // don't do this (yet).
-            ModExprKind::App(f, arg) => match arg.kind {
-                ModExprKind::Path(_p) => match self.infer_mod_expr(f)?.kind {
-                    ModTypeKind::Arrow(_id, _from, _to) => {
-                        let _arg_mtyp = self.infer_mod_expr(arg)?;
-                        //self.match_modtypes(arg_mtyp, from)?;
-                        // subst(arg_mt, (id := p))
-                        todo!("infer modexpr app")
-                    }
-                    _ => return Err(InferError::FunctorApplicationNonFunctor),
-                },
-                _ => return Err(InferError::FunctorApplicationNonPath),
-            },
-            ModExprKind::Ann(mexpr, mtyp) => {
-                let inferred = self.infer_mod_expr(mexpr)?;
-                self.match_modtypes(inferred, mtyp)?;
-                return Ok(mtyp);
-            }
-        };
-        Ok(self.arena.alloc(ModType {
-            kind,
-            span: mexpr.span,
-        }))
-    }
-
-    fn match_modtypes(
-        &mut self,
-        lhs: &'hir ModType<'hir>,
-        rhs: &'hir ModType<'hir>,
-    ) -> Result<(), InferError<'hir>> {
-        match (&lhs.kind, &rhs.kind) {
-            (ModTypeKind::Sig(l), ModTypeKind::Sig(r)) => {
-                let mut missing_items = Vec::new();
-                for (id, &l_val_typ) in &l.values {
-                    match r.values.get(id) {
-                        Some(&r_val_typ) => {
-                            if l_val_typ != r_val_typ {
-                                return Err(InferError::TypeMismatch(l_val_typ, r_val_typ));
-                            }
-                        }
-                        None => {
-                            missing_items.push(id.span);
-                        }
-                    }
-                }
-
-                if missing_items.is_empty() {
-                    Ok(())
-                } else {
-                    Err(InferError::MissingItems(lhs.span, rhs.span, missing_items))
-                }
-            }
-            (_, _) => Err(InferError::ModTypeMismatch(lhs.span, rhs.span)),
         }
     }
 

@@ -203,9 +203,6 @@ pub struct ModExpr<'hir> {
 pub enum ModExprKind<'hir> {
     Path(Path<'hir>),
     Struct(&'hir Items<'hir>),
-    Functor(Ident, &'hir ModType<'hir>, &'hir ModExpr<'hir>),
-    App(&'hir ModExpr<'hir>, &'hir ModExpr<'hir>),
-    Ann(&'hir ModExpr<'hir>, &'hir ModType<'hir>),
     Import(SourceId),
 }
 
@@ -216,23 +213,4 @@ pub struct Items<'hir> {
     pub modules: Map<Ident, &'hir ModExpr<'hir>>,
 
     pub type_groups: HirMap<HirSet>,
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct Specs<'hir> {
-    pub values: Map<Ident, Ty<'hir>>,
-    pub types: HirSet,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct ModType<'hir> {
-    pub kind: ModTypeKind<'hir>,
-    pub span: Span,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ModTypeKind<'hir> {
-    Path(Path<'hir>),
-    Sig(&'hir Specs<'hir>),
-    Arrow(Ident, &'hir ModType<'hir>, &'hir ModType<'hir>),
 }

@@ -386,10 +386,6 @@ impl<'hir> LoweringContext<'hir> {
                 let mexpr = self.with_module(mod_id, |self_| self_.lower_mod_expr(mexpr))?;
                 items.modules.insert(id, mexpr);
             }
-            ast::Item::ModType(id, mtyp) => {
-                seen.update(Namespace::Sig, id)?;
-                self.lower_mod_type(mtyp)?;
-            }
         }
         Ok(())
     }
@@ -404,84 +400,11 @@ impl<'hir> LoweringContext<'hir> {
                 let items = self.lower_items(items)?;
                 hir::ModExprKind::Struct(items)
             }
-            ast::ModExpr::Functor(id, mtyp, mexpr) => {
-                let mtyp = self.lower_mod_type(mtyp)?;
-                let mexpr = self.lower_mod_expr(mexpr)?;
-                hir::ModExprKind::Functor(id, mtyp, mexpr)
-            }
-            ast::ModExpr::App(func, arg) => {
-                let func = self.lower_mod_expr(func)?;
-                let arg = self.lower_mod_expr(arg)?;
-                hir::ModExprKind::App(func, arg)
-            }
-            ast::ModExpr::Ann(mexpr, mtyp) => {
-                let mexpr = self.lower_mod_expr(mexpr)?;
-                let mtyp = self.lower_mod_type(mtyp)?;
-                hir::ModExprKind::Ann(mexpr, mtyp)
-            }
             ast::ModExpr::Import(path) => hir::ModExprKind::Import(self.lower_import(path)?),
         };
         Ok(self.arena.alloc(hir::ModExpr {
             kind,
             span: mexpr.span(),
-        }))
-    }
-
-    fn lower_specs<'ast>(
-        &mut self,
-        specs: &'ast [Sp<ast::Spec<'ast>>],
-    ) -> Result<&'hir hir::Specs<'hir>, LowerError> {
-        let mut seen = Seen::default();
-        let mut hir_specs = hir::Specs::default();
-        for spec in specs {
-            self.lower_spec(spec, &mut seen, &mut hir_specs)?;
-        }
-        Ok(self.arena.alloc(hir_specs))
-    }
-
-    fn lower_spec<'ast>(
-        &mut self,
-        spec: &'ast Sp<ast::Spec<'ast>>,
-        seen: &mut Seen,
-        items: &mut hir::Specs<'hir>,
-    ) -> Result<(), LowerError> {
-        match **spec {
-            ast::Spec::Type(decls) => {
-                //self.lower_type_decl_group(decls, seen, items)?;
-            }
-            ast::Spec::Val(id, typ) => {
-                seen.update(Namespace::Value, id)?;
-                let typ = self.lower_type(typ)?;
-                items.values.insert(id, *typ);
-            }
-            ast::Spec::Mod(id, mtyp) => {
-                seen.update(Namespace::Mod, id)?;
-                self.lower_mod_type(mtyp)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn lower_mod_type<'ast>(
-        &mut self,
-        mtyp: &'ast Sp<ast::ModType<'ast>>,
-    ) -> Result<&'hir hir::ModType<'hir>, LowerError> {
-        let kind = match **mtyp {
-            ast::ModType::Path(p) => {
-                let hir_id = self.next_hir_id();
-                todo!()
-            }
-            ast::ModType::Sig(specs) => {
-                let specs = self.lower_specs(specs)?;
-                hir::ModTypeKind::Sig(specs)
-            }
-            ast::ModType::Arrow(id, arg, ret) => {
-                hir::ModTypeKind::Arrow(id, self.lower_mod_type(arg)?, self.lower_mod_type(ret)?)
-            }
-        };
-        Ok(self.arena.alloc(hir::ModType {
-            kind,
-            span: mtyp.span(),
         }))
     }
 

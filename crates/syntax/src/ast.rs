@@ -103,7 +103,6 @@ pub enum Item<'ast> {
     Type(&'ast [TypeDecl<'ast>]),
     Val(Ident, Option<&'ast Sp<Type<'ast>>>, &'ast Sp<Expr<'ast>>),
     Mod(Ident, &'ast Sp<ModExpr<'ast>>),
-    ModType(Ident, &'ast Sp<ModType<'ast>>),
     External(Ident, &'ast Sp<Type<'ast>>, Ident),
 }
 
@@ -111,24 +110,7 @@ pub enum Item<'ast> {
 pub enum ModExpr<'ast> {
     Path(Path<'ast>),
     Struct(&'ast [Sp<Item<'ast>>]),
-    Functor(Ident, &'ast Sp<ModType<'ast>>, &'ast Sp<ModExpr<'ast>>),
-    App(&'ast Sp<ModExpr<'ast>>, &'ast Sp<ModExpr<'ast>>),
-    Ann(&'ast Sp<ModExpr<'ast>>, &'ast Sp<ModType<'ast>>),
     Import(Ident),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Spec<'ast> {
-    Type(&'ast [TypeDecl<'ast>]),
-    Val(Ident, &'ast Sp<Type<'ast>>),
-    Mod(Ident, &'ast Sp<ModType<'ast>>),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ModType<'ast> {
-    Path(Path<'ast>),
-    Sig(&'ast [Sp<Spec<'ast>>]),
-    Arrow(Ident, &'ast Sp<ModType<'ast>>, &'ast Sp<ModType<'ast>>),
 }
 
 #[derive(Clone, Copy, Debug)]
