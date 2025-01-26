@@ -5,7 +5,7 @@ use std::{
 
 use base::{
     arena::Interned,
-    hash::{Map, Set},
+    hash::{IndexMap, Map, Set},
 };
 use span::{Ident, SourceId, Sp, Span, Sym};
 
@@ -21,7 +21,7 @@ impl fmt::Display for HirId {
     }
 }
 
-pub type HirMap<T> = Map<HirId, T>;
+pub type HirMap<T> = IndexMap<HirId, T>;
 pub type HirSet = Set<HirId>;
 
 base::newtype_index! {
@@ -209,9 +209,9 @@ pub enum ModExprKind<'hir> {
 
 #[derive(Clone, Default, Debug)]
 pub struct Items<'hir> {
-    pub values: Map<Ident, Value<'hir>>,
+    pub values: IndexMap<Ident, Value<'hir>>,
     pub types: HirSet,
-    pub modules: Map<Ident, &'hir ModExpr<'hir>>,
+    pub modules: IndexMap<Ident, &'hir ModExpr<'hir>>,
 
     pub type_groups: HirMap<HirSet>,
 }
