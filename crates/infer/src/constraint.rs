@@ -3,12 +3,12 @@ use std::{fmt, hash::Hash, marker::PhantomData};
 use base::hash::{IndexSet, Map};
 use hir::*;
 
-use crate::{TypeChecker, error::UnifyError, substitution::Substitution};
+use crate::{TypeChecker, error::TypeUnifyError, substitution::Substitution};
 
 pub fn solve<'a, T, U>(
     unifier: &mut U,
     constraints: Vec<Constraint<'a, T>>,
-) -> Result<Vec<Constraint<'a, T>>, UnifyError<'a, T>>
+) -> Result<Vec<Constraint<'a, T>>, U::Error>
 where
     T: Constrainable<'a>,
     U: Unifier<'a, T>,
@@ -123,31 +123,42 @@ where
     }
 }
 
+pub trait UnifyError<'a, T: Substitutable<'a>> {
+    fn length(lhs: usize, rhs: usize) -> Self;
+    fn occurs(var: T::Var, t: T) -> Self;
+}
+
 pub trait Unifier<'a, T>
 where
     T: Constrainable<'a>,
 {
+    type Error: UnifyError<'a, T>;
+
     fn subs(&self) -> &Substitution<'a, T>;
 
-    fn try_unify(&mut self, lhs: T, rhs: T) -> Result<(), UnifyError<'a, T>> {
+    fn try_unify(&mut self, lhs: T, rhs: T) -> Result<(), Self::Error> {
         let lhs = self.subs().real(lhs);
         let rhs = self.subs().real(rhs);
         match (lhs.as_var(), rhs.as_var()) {
             (_, Some(_)) => {
-                self.subs().union(rhs, lhs)?;
+                self.subs()
+                    .union(rhs, lhs)
+                    .map_err(|(v, t)| Self::Error::occurs(v, t))?;
                 Ok(())
             }
             (Some(_), _) => {
-                self.subs().union(lhs, rhs)?;
+                self.subs()
+                    .union(lhs, rhs)
+                    .map_err(|(v, t)| Self::Error::occurs(v, t))?;
                 Ok(())
             }
             (None, None) => self.unify_inside(lhs, rhs),
         }
     }
 
-    fn zip_unify(&mut self, lhs: &[T], rhs: &[T]) -> Result<(), UnifyError<'a, T>> {
+    fn zip_unify(&mut self, lhs: &[T], rhs: &[T]) -> Result<(), Self::Error> {
         if lhs.len() != rhs.len() {
-            return Err(UnifyError::Length(lhs.len(), rhs.len()));
+            return Err(Self::Error::length(lhs.len(), rhs.len()));
         }
 
         for (&l, &r) in lhs.iter().zip(rhs) {
@@ -159,7 +170,7 @@ where
 
     /// Perform one level of equality testing between `lhs` and `rhs` and recursively call back
     /// into `self` for unification on any subterms.
-    fn unify_inside(&mut self, lhs: T, rhs: T) -> Result<(), UnifyError<'a, T>>;
+    fn unify_inside(&mut self, lhs: T, rhs: T) -> Result<(), Self::Error>;
 }
 
 mod wl {
@@ -333,7 +344,7 @@ impl<'a, T> Solver<'a, T>
 where
     T: Constrainable<'a>,
 {
-    fn solve<U>(mut self, unifier: &mut U) -> Result<Vec<Constraint<'a, T>>, UnifyError<'a, T>>
+    fn solve<U>(mut self, unifier: &mut U) -> Result<Vec<Constraint<'a, T>>, U::Error>
     where
         U: Unifier<'a, T>,
     {
@@ -385,15 +396,13 @@ where
 }
 
 impl<'hir> Unifier<'hir, Ty<'hir>> for TypeChecker<'hir> {
+    type Error = TypeUnifyError<'hir>;
+
     fn subs(&self) -> &Substitution<'hir, Ty<'hir>> {
         &self.subs
     }
 
-    fn unify_inside(
-        &mut self,
-        lhs: Ty<'hir>,
-        rhs: Ty<'hir>,
-    ) -> Result<(), UnifyError<'hir, Ty<'hir>>> {
+    fn unify_inside(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) -> Result<(), Self::Error> {
         log::trace!("unify_inside {lhs} ~ {rhs}");
         match (*lhs.kind(), *rhs.kind()) {
             (lhs, rhs) if lhs == rhs => Ok(()),
@@ -406,17 +415,17 @@ impl<'hir> Unifier<'hir, Ty<'hir>> for TypeChecker<'hir> {
                 let l_h = self
                     .env
                     .get(&l_h.res().hir_id())
-                    .ok_or(UnifyError::Lookup(l_h))?;
+                    .ok_or(TypeUnifyError::Lookup(l_h))?;
                 let r_h = self
                     .env
                     .get(&r_h.res().hir_id())
-                    .ok_or(UnifyError::Lookup(r_h))?;
+                    .ok_or(TypeUnifyError::Lookup(r_h))?;
                 self.try_unify(*l_h, *r_h)?;
                 self.zip_unify(l_args, r_args)
             }
             (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
             (TyKind::Vector(l), TyKind::Vector(r)) => self.try_unify(l, r),
-            (_, _) => Err(UnifyError::Mismatch(lhs, rhs)),
+            (_, _) => Err(TypeUnifyError::Mismatch(lhs, rhs)),
         }
     }
 }
@@ -492,7 +501,6 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
             (TyKind::Uni(a), TyKind::Uni(b)) if a == b => Constraint::equal(r1, r2),
             (TyKind::Skolem(a), TyKind::Skolem(b)) if a == b => Constraint::equal(r1, r2),
             (TyKind::Var(a), TyKind::Var(b)) if a.name.sym == b.name.sym => {
-                todo!(); // type var eq
                 Constraint::equal(r1, r2)
             }
             (TyKind::Uni(a), TyKind::Uni(_)) if subs.occurs(a.id, r2) => Constraint::equal(

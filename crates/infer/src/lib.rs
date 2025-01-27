@@ -1,7 +1,6 @@
 #![feature(never_type)]
-#![allow(unused)]
 
-use base::{hash::Map, pp::FormatIterator};
+use base::hash::Map;
 use hir::*;
 use span::{Ident, Span, Sym, diag::Diagnostic};
 
@@ -90,7 +89,7 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn infer(mut self) -> Result<InferData<'hir>, InferError<'hir>> {
-        let _unit_mtyp = self.infer_comp_unit(self.program.unit)?;
+        self.infer_comp_unit(self.program.unit)?;
         let main_typ = self.infer_solve_expr(self.program.main)?;
         log::trace!("main : {main_typ}");
         self.zonk();
@@ -107,7 +106,7 @@ impl<'hir> TypeChecker<'hir> {
 
     fn infer_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) -> Result<(), InferError<'hir>> {
         match mexpr.kind {
-            ModExprKind::Import(source_id) => {
+            ModExprKind::Import(_source_id) => {
                 todo!()
                 // if let Some(mtyp) = self.env.comp_units.get(&source_id) {
                 //     return Ok(*mtyp);
@@ -120,7 +119,7 @@ impl<'hir> TypeChecker<'hir> {
                 //     return self.infer_comp_unit(comp_unit);
                 // }
             }
-            ModExprKind::Path(path) => {
+            ModExprKind::Path(_path) => {
                 todo!()
             }
             ModExprKind::Struct(items) => {
@@ -147,8 +146,7 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn infer_decl_group(&mut self, group: TypeDeclGroup<'hir>) -> Result<(), InferError<'hir>> {
-        log::trace!("infer_decl_group");
+    fn _infer_decl_group(&mut self, _group: TypeDeclGroup<'hir>) -> Result<(), InferError<'hir>> {
         todo!()
     }
 
@@ -304,15 +302,13 @@ impl<'hir> TypeChecker<'hir> {
             PatKind::Tuple(pats) => Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span)),
             PatKind::Constructor(cons, args) => {
                 // TODO. well-formed check for cons_t
-                let cons_typ = todo!(); //self.lookup_type(self.arena.path(cons, []))?;
-
-                let cons_typ = self.instantiate(cons_typ);
+                let cons_typ = self.infer_path(cons)?;
                 if args.is_empty() {
                     Ok(cons_typ)
                 } else {
                     let arg_typs = self.infer_pats(args)?;
                     let ret_typ = self.fresh_var();
-
+                    let cons_typ = self.instantiate(cons_typ);
                     self.constrain(Ty::n_arrow(self.arena, arg_typs, ret_typ), cons_typ);
                     Ok(ret_typ)
                 }

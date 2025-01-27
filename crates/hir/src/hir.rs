@@ -216,7 +216,7 @@ pub struct Items<'hir> {
     pub type_groups: HirMap<HirSet>,
 }
 
-impl<'hir> Expr<'hir> {
+impl Expr<'_> {
     pub fn visit_with<V>(&self, v: &mut V)
     where
         V: Visitor<Self>,
