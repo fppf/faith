@@ -93,7 +93,6 @@ pub struct TypeDecl<'ast> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TypeDeclKind<'ast> {
-    Abstract(Span),
     Alias(&'ast Sp<Type<'ast>>),
     Variant(&'ast [(Ident, &'ast [Sp<Type<'ast>>])]),
 }

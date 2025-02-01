@@ -24,8 +24,6 @@ pub enum DefKind {
     Value,
     Type,
     Cons,
-    Mod,
-    Sig,
 }
 
 impl fmt::Display for Res {

@@ -1,6 +1,7 @@
 use std::{
     fmt,
     ops::{Index, IndexMut},
+    ptr::slice_from_raw_parts_mut,
 };
 
 use base::{
@@ -111,7 +112,6 @@ enum Namespace {
     Value,
     Type,
     Mod,
-    Sig,
 }
 
 impl fmt::Display for Namespace {
@@ -120,7 +120,6 @@ impl fmt::Display for Namespace {
             Namespace::Value => "value",
             Namespace::Type => "type",
             Namespace::Mod => "module",
-            Namespace::Sig => " module type",
         }
         .fmt(f)
     }
@@ -131,7 +130,6 @@ struct PerNs<T> {
     value_ns: T,
     type_ns: T,
     mod_ns: T,
-    sig_ns: T,
 }
 
 impl<T> Index<Namespace> for PerNs<T> {
@@ -142,7 +140,6 @@ impl<T> Index<Namespace> for PerNs<T> {
             Namespace::Value => &self.value_ns,
             Namespace::Type => &self.type_ns,
             Namespace::Mod => &self.mod_ns,
-            Namespace::Sig => &self.sig_ns,
         }
     }
 }
@@ -153,7 +150,6 @@ impl<T> IndexMut<Namespace> for PerNs<T> {
             Namespace::Value => &mut self.value_ns,
             Namespace::Type => &mut self.type_ns,
             Namespace::Mod => &mut self.mod_ns,
-            Namespace::Sig => &mut self.sig_ns,
         }
     }
 }
@@ -168,7 +164,7 @@ struct LoweringContext<'hir> {
     types: HirMap<TypeDecl<'hir>>,
 
     // Cached imports, associating a source id to an already lowered comp unit.
-    imports: Map<SourceId, &'hir hir::CompUnit<'hir>>,
+    imports: Map<SourceId, (ModuleId, &'hir hir::CompUnit<'hir>)>,
 
     // The graph of modules.
     modules: IndexVec<ModuleId, Module>,
@@ -180,10 +176,7 @@ struct LoweringContext<'hir> {
     locals: ScopedMap<Ident, HirId>,
 
     // Which module (comp unit or inline) we are processing.
-    current_module: Option<ModuleId>,
-
-    // Which comp unit we are processing.
-    current_comp_unit: Option<SourceId>,
+    current_module_id: Option<ModuleId>,
 }
 
 impl<'hir> LoweringContext<'hir> {
@@ -198,8 +191,7 @@ impl<'hir> LoweringContext<'hir> {
             modules: IndexVec::default(),
             module_stack: Vec::new(),
             locals: ScopedMap::default(),
-            current_module: None,
-            current_comp_unit: None,
+            current_module_id: None,
         }
     }
 
@@ -218,7 +210,11 @@ impl<'hir> LoweringContext<'hir> {
         Ok(self.arena.alloc(hir::Program {
             unit,
             main,
-            imports: self.imports,
+            imports: self
+                .imports
+                .iter()
+                .map(|(&source_id, &(_, comp_unit))| (source_id, comp_unit))
+                .collect(),
             values: self.values,
             constructors: self.constructors,
             types: self.types,
@@ -231,20 +227,36 @@ impl<'hir> LoweringContext<'hir> {
         next
     }
 
+    fn current_module_id(&self) -> ModuleId {
+        self.current_module_id.unwrap()
+    }
+
     fn current_module(&self) -> &Module {
-        self.modules.get(self.current_module.unwrap()).unwrap()
+        self.modules.get(self.current_module_id()).unwrap()
     }
 
     fn current_module_mut(&mut self) -> &mut Module {
-        self.modules.get_mut(self.current_module.unwrap()).unwrap()
+        let module_id = self.current_module_id();
+        self.modules.get_mut(module_id).unwrap()
+    }
+
+    fn current_comp_unit(&self) -> SourceId {
+        for &module_id in self.module_stack.iter().rev() {
+            let module = self.modules.get(module_id).unwrap();
+            match module.kind {
+                ModuleKind::Inline(_) => (),
+                ModuleKind::Unit(source_id) => return source_id,
+            }
+        }
+        unreachable!()
     }
 
     fn with_module<R>(&mut self, module: ModuleId, f: impl FnOnce(&mut Self) -> R) -> R {
-        let old_module = std::mem::replace(&mut self.current_module, Some(module));
+        let old_module = std::mem::replace(&mut self.current_module_id, Some(module));
         self.module_stack.push(module);
         let ret = f(self);
         self.module_stack.pop();
-        self.current_module = old_module;
+        self.current_module_id = old_module;
         ret
     }
 
@@ -277,6 +289,8 @@ impl<'hir> LoweringContext<'hir> {
         // Descend into the innermost module in the path prefix.
         let mut curr = self.current_module();
         for segment in path.segments().take(path.access.len()) {
+            log::trace!("{segment}");
+            log::trace!("{:?}", curr);
             curr = curr
                 .modules
                 .get(&segment)
@@ -290,23 +304,34 @@ impl<'hir> LoweringContext<'hir> {
             return Ok(Res::Def(DefKind::Value, *hir_id));
         }
 
+        if ns == Namespace::Type
+            && let Some(hir_id) = curr.types.get(&path.leaf())
+        {
+            return Ok(Res::Def(DefKind::Type, *hir_id));
+        }
+
+        log::trace!("{:?}", curr);
+
         Err(LowerError::Resolve(path.to_string(), path.span()))
     }
 
     fn lower_comp_unit<'ast>(
         &mut self,
         unit: &ast::CompUnit<'ast>,
-    ) -> Result<&'hir hir::CompUnit<'hir>, LowerError> {
+    ) -> Result<(ModuleId, &'hir hir::CompUnit<'hir>), LowerError> {
         let source_id = unit.source_id;
-        let module = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
-        let items = self.with_module(module, |self_| self_.lower_items(unit.items))?;
-        Ok(self.arena.alloc(hir::CompUnit { source_id, items }))
+        let module_id = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
+        let items = self.with_module(module_id, |self_| self_.lower_items(unit.items))?;
+        Ok((
+            module_id,
+            self.arena.alloc(hir::CompUnit { source_id, items }),
+        ))
     }
 
-    fn lower_import(&mut self, import_path: Ident) -> Result<SourceId, LowerError> {
+    fn lower_import(&mut self, import_path: Ident) -> Result<(ModuleId, SourceId), LowerError> {
         let mut file_path = std::path::PathBuf::new();
-        if let Some(id) = self.current_comp_unit
-            && let Some(base_path) = span::with_source_map(|sm| sm[id].path.clone())
+        if let Some(base_path) =
+            span::with_source_map(|sm| sm[self.current_comp_unit()].path.clone())
         {
             file_path.push(base_path.parent().unwrap());
         }
@@ -316,14 +341,18 @@ impl<'hir> LoweringContext<'hir> {
             if let Some(source_id) =
                 span::with_source_map(|sm| sm.lookup_existing_source_id(&file_path))
             {
-                source_id
+                self.imports
+                    .get(&source_id)
+                    .map(|&(module_id, _)| (module_id, source_id))
+                    .unwrap()
             } else {
                 let ast_arena = syntax::Arena::default();
                 let comp_unit = syntax::parse_comp_unit_in(&ast_arena, &file_path)
                     .map_err(LowerError::Parse)?;
-                let comp_unit = self.lower_comp_unit(comp_unit)?;
-                self.imports.insert(comp_unit.source_id, comp_unit);
-                comp_unit.source_id
+                let (module_id, comp_unit) = self.lower_comp_unit(comp_unit)?;
+                self.imports
+                    .insert(comp_unit.source_id, (module_id, comp_unit));
+                (module_id, comp_unit.source_id)
             },
         )
     }
@@ -405,7 +434,7 @@ impl<'hir> LoweringContext<'hir> {
                     recursive: recursive_visitor.recursive_function,
                     expr,
                     typ: match typ {
-                        Some(typ) => Some(*self.lower_type(typ)?),
+                        Some(typ) => Some(self.lower_type(typ)?),
                         None => None,
                     },
                 };
@@ -415,43 +444,42 @@ impl<'hir> LoweringContext<'hir> {
             ast::Item::External(id, typ, s) => {
                 seen.update(Namespace::Value, id)?;
                 let hir_id = self.next_hir_id();
-                self.current_module_mut().values.insert(id, hir_id);
+                let typ = self.lower_type(typ)?;
                 let value = Value {
                     hir_id,
                     recursive: false,
-                    expr: self.arena.expr(hir::ExprKind::External(s.sym), s.span),
-                    typ: Some(*self.lower_type(typ)?),
+                    expr: self.arena.expr(hir::ExprKind::External(s.sym, typ), s.span),
+                    typ: Some(typ),
                 };
+                self.current_module_mut().values.insert(id, hir_id);
                 items.values.insert(id, value);
                 self.values.insert(hir_id, value);
             }
             ast::Item::Mod(id, mexpr) => {
                 seen.update(Namespace::Mod, id)?;
-                let mod_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
-                self.current_module_mut().modules.insert(id, mod_id);
-                let mexpr = self.with_module(mod_id, |self_| self_.lower_mod_expr(mexpr))?;
+                let kind = match **mexpr {
+                    ast::ModExpr::Path(p) => todo!(),
+                    ast::ModExpr::Struct(items) => {
+                        let module_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
+                        self.current_module_mut().modules.insert(id, module_id);
+                        let items =
+                            self.with_module(module_id, |self_| self_.lower_items(items))?;
+                        hir::ModExprKind::Struct(items)
+                    }
+                    ast::ModExpr::Import(path) => {
+                        let (module_id, source_id) = self.lower_import(path)?;
+                        self.current_module_mut().modules.insert(id, module_id);
+                        hir::ModExprKind::Import(source_id)
+                    }
+                };
+                let mexpr = self.arena.alloc(hir::ModExpr {
+                    kind,
+                    span: mexpr.span(),
+                });
                 items.modules.insert(id, mexpr);
             }
         }
         Ok(())
-    }
-
-    fn lower_mod_expr<'ast>(
-        &mut self,
-        mexpr: &'ast Sp<ast::ModExpr<'ast>>,
-    ) -> Result<&'hir hir::ModExpr<'hir>, LowerError> {
-        let kind = match **mexpr {
-            ast::ModExpr::Path(p) => todo!(),
-            ast::ModExpr::Struct(items) => {
-                let items = self.lower_items(items)?;
-                hir::ModExprKind::Struct(items)
-            }
-            ast::ModExpr::Import(path) => hir::ModExprKind::Import(self.lower_import(path)?),
-        };
-        Ok(self.arena.alloc(hir::ModExpr {
-            kind,
-            span: mexpr.span(),
-        }))
     }
 
     fn lower_type_decl_group<'ast>(
@@ -467,10 +495,10 @@ impl<'hir> LoweringContext<'hir> {
         let mut decls = Vec::with_capacity(group.len());
         for decl in group {
             let hir_id = self.next_hir_id();
+            self.current_module_mut().types.insert(decl.id, hir_id);
             let decl = self.lower_type_decl(decl, seen)?;
             self.types.insert(hir_id, decl);
             items.types.insert(hir_id);
-            self.current_module_mut().types.insert(decl.id, hir_id);
             decls.push(decl);
         }
 
@@ -490,9 +518,6 @@ impl<'hir> LoweringContext<'hir> {
         let hir_id = self.next_hir_id();
 
         let kind = match decl.kind {
-            ast::TypeDeclKind::Abstract(span) => {
-                hir::TypeDeclKind::Alias(Sp::new(self.arena.typ(hir::TyKind::Abstract, span), span))
-            }
             ast::TypeDeclKind::Alias(t) => hir::TypeDeclKind::Alias(self.lower_type(t)?),
             ast::TypeDeclKind::Variant(variants) => {
                 let mut constructors = Set::default();
@@ -533,11 +558,8 @@ impl<'hir> LoweringContext<'hir> {
         })
     }
 
-    fn lower_type<'ast>(
-        &mut self,
-        typ: &'ast Sp<ast::Type<'ast>>,
-    ) -> Result<Sp<Ty<'hir>>, LowerError> {
-        Ok(Sp::new(self.lower_type_unscoped(typ)?, typ.span))
+    fn lower_type<'ast>(&mut self, typ: &'ast Sp<ast::Type<'ast>>) -> Result<Ty<'hir>, LowerError> {
+        self.lower_type_unscoped(typ)
     }
 
     fn lower_type_unscoped<'ast>(
@@ -585,19 +607,26 @@ impl<'hir> LoweringContext<'hir> {
                 typ.span(),
             ),
             ast::Type::Row(_fields, _ext) => todo!("record types"),
-            ast::Type::Path(p) => todo!(), //Ty::app(self.arena, self.lower_type_path(p)?, []),
+            ast::Type::Path(p) => Ty::app(self.arena, self.lower_type_path(*p)?, [], typ.span()),
             ast::Type::App(head, ts) => {
-                todo!()
-                /*
-                let head = self.lower_type_path(head)?;
+                let head = self.lower_type_path(*head)?;
                 let mut args = Vec::with_capacity(ts.len());
                 for t in ts.iter() {
                     args.push(self.lower_type_unscoped(t)?);
                 }
-                Ty::app(self.arena, head, args)
-                */
+                Ty::app(self.arena, head, args, typ.span())
             }
         })
+    }
+
+    fn lower_type_path<'ast>(
+        &mut self,
+        path: ast::Path<'ast>,
+    ) -> Result<hir::Path<'hir>, LowerError> {
+        let res = self.resolve_path(Namespace::Type, path)?;
+        Ok(self
+            .arena
+            .path(path.root, path.access.iter().copied(), path.span(), res))
     }
 
     fn lower_pat<'ast>(
@@ -747,7 +776,7 @@ impl<'hir> LoweringContext<'hir> {
     ) -> Result<hir::ExprArg<'hir>, LowerError> {
         Ok(match &**expr_arg {
             ast::ExprArg::Expr(e) => hir::ExprArg::Expr(self.lower_expr(e)?),
-            ast::ExprArg::Type(t) => hir::ExprArg::Type(*self.lower_type(t)?),
+            ast::ExprArg::Type(t) => hir::ExprArg::Type(self.lower_type(t)?),
         })
     }
 

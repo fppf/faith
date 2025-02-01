@@ -1,4 +1,4 @@
 /target
 /notes
 Cargo.lock
-*.fth
+/*.fth

@@ -126,7 +126,7 @@ impl HirPrinter {
                 self.print_pat(p);
                 self.space();
                 self.word_space(":");
-                self.print_type(*t, TypePrec::Top);
+                self.print_type(t, TypePrec::Top);
                 self.pclose();
             }
             PatKind::Tuple(ps) => {
@@ -232,7 +232,7 @@ impl HirPrinter {
                 self.print_expr(e);
                 self.space();
                 self.word_space(":");
-                self.print_type(*t, TypePrec::Top);
+                self.print_type(t, TypePrec::Top);
                 self.pclose();
             }
             ExprKind::Tuple(es) => {

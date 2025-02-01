@@ -199,7 +199,7 @@ impl Ord for Skolem {
 
 impl fmt::Display for Skolem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{}", self.name)
+        write!(f, "#{}:{}", self.name, self.id.index())
     }
 }
 

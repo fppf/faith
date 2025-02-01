@@ -106,18 +106,13 @@ impl<'hir> TypeChecker<'hir> {
 
     fn infer_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) -> Result<(), InferError<'hir>> {
         match mexpr.kind {
-            ModExprKind::Import(_source_id) => {
-                todo!()
-                // if let Some(mtyp) = self.env.comp_units.get(&source_id) {
-                //     return Ok(*mtyp);
-                // } else {
-                //     let comp_unit = self
-                //         .program
-                //         .imports
-                //         .get(&source_id)
-                //         .expect("HIR lowering produced an invalid source_id for an import");
-                //     return self.infer_comp_unit(comp_unit);
-                // }
+            ModExprKind::Import(source_id) => {
+                let comp_unit = self
+                    .program
+                    .imports
+                    .get(&source_id)
+                    .expect("HIR lowering produced an invalid source_id for an import");
+                self.infer_comp_unit(comp_unit)
             }
             ModExprKind::Path(_path) => {
                 todo!()
@@ -128,7 +123,8 @@ impl<'hir> TypeChecker<'hir> {
                 for (&id, value) in &items.values {
                     let typ = match value.typ {
                         Some(typ) => {
-                            self.check_expr_poly(value.expr, typ)?;
+                            self.check_expr(value.expr, typ)?;
+                            self.solve_current()?;
                             typ
                         }
                         None => self.infer_solve_expr(value.expr)?,
@@ -161,6 +157,7 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
+        log::trace!("{lhs} ~ {rhs}");
         self.constraints.push(Constraint::equal(lhs, rhs));
     }
 
@@ -229,18 +226,22 @@ impl<'hir> TypeChecker<'hir> {
             .map(|&var| (var, Skolem::new(self.fresh_skolem(), var.name)))
             .collect();
 
-        SkolemReplacer {
+        let skolemized = SkolemReplacer {
             arena: self.arena,
             skolems,
         }
-        .fold(typ)
+        .fold(typ);
+        if typ != skolemized {
+            log::trace!("skolemize ({typ}) => ({skolemized})");
+        }
+        skolemized
     }
 
     /// Split a an application into (head, args). Can only be called on things which
     /// "look like applications", see note in `infer_app`.
     fn split_app(&self, expr: Expr<'hir>) -> (Expr<'hir>, &'hir [ExprArg<'hir>]) {
         match *expr.kind() {
-            ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[]),
+            ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
             ExprKind::App(_, h, args) => (h, args),
             _ => unreachable!(),
         }
@@ -296,8 +297,8 @@ impl<'hir> TypeChecker<'hir> {
             }
             PatKind::Lit(l) => Ok(self.type_from_lit(l, pat.span)),
             PatKind::Ann(pat, typ) => {
-                self.check_pat(pat, *typ)?;
-                Ok(*typ)
+                self.check_pat(pat, typ)?;
+                Ok(typ)
             }
             PatKind::Tuple(pats) => Ok(Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span)),
             PatKind::Constructor(cons, args) => {
@@ -320,7 +321,7 @@ impl<'hir> TypeChecker<'hir> {
     /// Check an expression against a type.
     fn check_expr(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
         match (*expr.kind(), expected.kind()) {
-            (ExprKind::App(..) | ExprKind::Path(_), _) | (ExprKind::Constructor(_), _) => {
+            (ExprKind::App(..) | ExprKind::Path(_), _) | (ExprKind::Constructor(..), _) => {
                 self.check_app(expr, expected)
             }
             (ExprKind::Lit(l), bt @ TyKind::Base(_))
@@ -364,16 +365,6 @@ impl<'hir> TypeChecker<'hir> {
                 Ok(())
             }
         }
-    }
-
-    /// Check an expression against a possibly-polymorphic type.
-    fn check_expr_poly(
-        &mut self,
-        expr: Expr<'hir>,
-        expected: Ty<'hir>,
-    ) -> Result<(), InferError<'hir>> {
-        let expected = self.skolemize(expected);
-        self.check_expr(expr, expected)
     }
 
     /// Check an application expression against a type. Refer to note in `infer_app` about what
@@ -456,17 +447,17 @@ impl<'hir> TypeChecker<'hir> {
                 _ => unreachable!(),
             }
         } else {
-            self.check_expr_poly(body, arrow)
+            self.check_expr(body, arrow)
         }
     }
 
     /// Infer a type for an expression.
     fn infer_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         let res = match *expr.kind() {
-            ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
+            ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(..) => {
                 self.infer_app(expr)?
             }
-            ExprKind::External(_s) => todo!(),
+            ExprKind::External(_, typ) => typ,
             ExprKind::Lit(l) => self.type_from_lit(l, expr.span()),
             ExprKind::Lambda(lambda) => self.infer_lambda(lambda.args, lambda.body)?,
             ExprKind::Let(binds, body) => {
@@ -478,8 +469,8 @@ impl<'hir> TypeChecker<'hir> {
                 self.infer_expr(body)?
             }
             ExprKind::Ann(expr, typ) => {
-                self.check_expr(expr, *typ)?;
-                *typ
+                self.check_expr(expr, typ)?;
+                typ
             }
             ExprKind::Tuple(elems) => {
                 let mut typs = Vec::with_capacity(elems.len());
@@ -581,20 +572,28 @@ impl<'hir> TypeChecker<'hir> {
         match self.env.get(&hir_id) {
             Some(typ) => Ok(*typ),
             None => {
-                let value = self.program.values.get(&hir_id).unwrap();
+                let typ = if let Some(cons) = self.program.constructors.get(&hir_id) {
+                    cons.typ
+                } else {
+                    let value = self
+                        .program
+                        .values
+                        .get(&hir_id)
+                        .unwrap_or_else(|| panic!("ICE: expected '{path}' to be lowered"));
 
-                if value.recursive {
-                    let fn_var = self.fresh_var();
-                    self.env.insert(hir_id, fn_var);
-                    return Ok(fn_var);
-                }
-
-                let typ = match value.typ {
-                    Some(typ) => {
-                        self.check_expr_poly(value.expr, typ)?;
-                        typ
+                    if value.recursive {
+                        let fn_var = self.fresh_var();
+                        self.env.insert(hir_id, fn_var);
+                        return Ok(fn_var);
                     }
-                    None => self.infer_expr(value.expr)?,
+
+                    match value.typ {
+                        Some(typ) => {
+                            self.check_expr(value.expr, typ)?;
+                            typ
+                        }
+                        None => self.infer_expr(value.expr)?,
+                    }
                 };
                 self.env.insert(hir_id, typ);
                 Ok(typ)

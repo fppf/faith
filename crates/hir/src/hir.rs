@@ -72,7 +72,7 @@ pub struct TypeDecl<'hir> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TypeDeclKind<'hir> {
-    Alias(Sp<Ty<'hir>>),
+    Alias(Ty<'hir>),
     Variant(&'hir Set<HirId>),
 }
 
@@ -100,9 +100,9 @@ impl<'hir> Expr<'hir> {
 pub enum ExprKind<'hir> {
     Path(Path<'hir>),
     Constructor(Path<'hir>),
-    External(Sym),
+    External(Sym, Ty<'hir>),
     Lit(Lit),
-    Ann(Expr<'hir>, Sp<Ty<'hir>>),
+    Ann(Expr<'hir>, Ty<'hir>),
     Tuple(&'hir [Expr<'hir>]),
     Vector(&'hir [Expr<'hir>]),
     Lambda(Lambda<'hir>),
@@ -140,7 +140,7 @@ pub enum PatKind<'hir> {
     Wild,
     Var(Ident, HirId),
     Lit(Lit),
-    Ann(&'hir Pat<'hir>, Sp<Ty<'hir>>),
+    Ann(&'hir Pat<'hir>, Ty<'hir>),
     Tuple(&'hir [Pat<'hir>]),
     Constructor(Path<'hir>, &'hir [Pat<'hir>]),
     Or(&'hir [Pat<'hir>]),
@@ -224,7 +224,7 @@ impl Expr<'_> {
         match *self.kind() {
             ExprKind::Path(_)
             | ExprKind::Constructor(_)
-            | ExprKind::External(_)
+            | ExprKind::External(..)
             | ExprKind::Lit(_) => (),
             ExprKind::Ann(e, _) => v.visit(e),
             ExprKind::Tuple(es) | ExprKind::Vector(es) => es.iter().for_each(|&e| v.visit(e)),

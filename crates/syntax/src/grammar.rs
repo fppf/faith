@@ -448,25 +448,8 @@ fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>
 }
 
 fn infix_op<'ast>(p: &mut Parser<'ast>) -> Option<((u8, u8), Sp<Expr<'ast>>)> {
-    /*
-    let intern_op = |op: &'static str| {
-        Ident::from_sym(
-            Sym::from_str(op),
-            Span::new(
-                p.current().span.start,
-                p.current().span.start + BytePos::from_usize(op.len()),
-            ),
-        )
-    };
-    */
     let (id, c) = match p.current().kind {
         INFIX(id, c) => (id, c),
-        /*
-        EQUAL => (intern_op("="), '='),
-        EQUAL_ARROW => (intern_op("=>"), '='),
-        ARROW => (intern_op("->"), '-'),
-        PIPE => (intern_op("|"), '|'),
-        */
         _ => return None,
     };
     let bp: (u8, u8) = match c {
@@ -747,14 +730,7 @@ fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
         vars.push(s);
     }
     let vars = alloc_iter!(p, vars);
-    if !p.eat(EQUAL) {
-        return Ok(TypeDecl {
-            id,
-            vars,
-            kind: TypeDeclKind::Abstract(id.span),
-            span: p.end(m),
-        });
-    }
+    p.expect(EQUAL)?;
     let kind = match p.current().kind {
         PIPE => {
             p.bump(PIPE);
@@ -805,22 +781,11 @@ fn struct_item<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
 
 fn struct_item_type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let m = p.start();
-    let mut decl_group = vec![struct_type_decl(p)?];
+    let mut decl_group = vec![type_decl(p)?];
     while !p.at(EOF) && p.eat(KW_AND) {
-        decl_group.push(struct_type_decl(p)?);
+        decl_group.push(type_decl(p)?);
     }
     Ok(Sp::new(Item::Type(alloc_iter!(p, decl_group)), p.end(m)))
-}
-
-fn struct_type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
-    let decl = type_decl(p)?;
-    if let TypeDeclKind::Abstract(span) = decl.kind {
-        return Err(ParseError::new(
-            "abstract types prohibited in structures",
-            span,
-        ));
-    }
-    Ok(decl)
 }
 
 fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
@@ -897,7 +862,13 @@ fn lit_str(p: &mut Parser<'_>) -> ParseResult<Ident> {
 fn struct_item_external<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let m = p.start();
     p.bump(KW_EXTERNAL);
-    let ident = ident_lower(p)?;
+    let (ident, kind) = ident_or_infix(p)?;
+    if kind == IdentKind::Cons {
+        return Err(ParseError::new(
+            "cannot declare external constructor",
+            ident.span,
+        ));
+    }
     p.expect(COLON)?;
     let t = type_(p)?;
     p.expect(EQUAL)?;
