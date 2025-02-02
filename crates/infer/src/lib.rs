@@ -65,12 +65,12 @@ impl TypeVarSource {
         self.char_count = 0;
     }
 
-    fn fresh(&mut self) -> Ident {
+    fn fresh(&mut self) -> TypeVar {
         let ch = (b'a' + self.char_count) as char;
         self.char_count = (self.char_count + 1) % (b'z' - b'a');
         let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
         self.stamp += 1;
-        id
+        TypeVar::new(id)
     }
 }
 
@@ -129,10 +129,8 @@ impl<'hir> TypeChecker<'hir> {
         let free_vars = typ.uni_vars();
         if !free_vars.is_empty() {
             for var in free_vars {
-                self.subs.insert(
-                    var.id,
-                    Ty::type_var(self.arena, TypeVar::new(self.type_var_src.fresh())),
-                );
+                self.subs
+                    .insert(var.id, Ty::type_var(self.arena, self.type_var_src.fresh()));
             }
             self.subs.apply(typ)
         } else {
@@ -460,12 +458,15 @@ impl<'hir> TypeChecker<'hir> {
             (ExprKind::Lit(l), TyKind::Var(_)) => {
                 self.constrain(expected, self.type_from_lit(l, expr.span()));
             }
-            (ExprKind::Lambda(lambda), TyKind::Var(_)) => {
+
+            // TODO. these branches probably aren't necessary
+            (ExprKind::Lambda(lambda), TyKind::Uni(_)) => {
                 self.check_lambda_var(lambda.args, lambda.body, expected)?
             }
             (ExprKind::Lambda(lambda), TyKind::Arrow(..)) => {
                 self.check_lambda_arrow(lambda.args, lambda.body, expected)?
             }
+
             (ExprKind::Tuple(es), TyKind::Tuple(ts)) => {
                 if es.len() == ts.len() {
                     for (&e, &t) in es.iter().zip(*ts) {
