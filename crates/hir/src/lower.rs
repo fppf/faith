@@ -438,14 +438,12 @@ impl<'hir> LoweringContext<'hir> {
                         match expr.kind() {
                             ExprKind::Path(p) if p.res().hir_id() == self.hir_id => {
                                 self.recursive_value = true;
-                                return;
                             }
                             ExprKind::App(_, e, args) => {
                                 if let ExprKind::Path(p) = e.kind()
                                     && p.res().hir_id() == self.hir_id
                                 {
                                     self.recursive_function = true;
-                                    return;
                                 }
                             }
                             _ => expr.visit_with(self),
