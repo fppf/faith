@@ -455,10 +455,6 @@ impl<'hir> TypeChecker<'hir> {
     fn check_expr(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
         //let expected = self.skolemize(expected);
         match (*expr.kind(), expected.kind()) {
-            (ExprKind::App(..) | ExprKind::Path(_), _) | (ExprKind::Constructor(..), _) => {
-                let typ = self.infer_app(expr)?;
-                self.constrain(typ, expected);
-            }
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (ExprKind::Lit(l), TyKind::Var(_)) => {
                 self.constrain(expected, self.type_from_lit(l, expr.span()));
