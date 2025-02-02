@@ -5,8 +5,9 @@ use span::diag;
 #[derive(PartialEq)]
 pub enum Pass {
     Parse,
-    Lower,
+    Hir,
     Infer,
+    Mir,
 }
 
 pub enum Source {
@@ -43,15 +44,17 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
         Source::Str(src) => hir::parse_and_lower_str_program_in(&hir_arena, &src),
     }?;
 
-    if stop_after == Pass::Lower {
+    if stop_after == Pass::Hir {
         return Ok(());
     }
 
-    let _ = infer::infer_program_in(&hir_arena, hir)?;
+    let infer_data = infer::infer_program_in(&hir_arena, hir)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
+
+    mir::lower(&hir_arena, infer_data, hir);
 
     Ok(())
 }

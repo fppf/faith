@@ -5,8 +5,6 @@ edition = "2024"
 authors = ["ryn <ryn@fppf.site>"]
 
 [dependencies]
-itertools = "0.12.1"
-
 base = { path = "../base" }
 span = { path = "../span" }
 infer = { path = "../infer" }

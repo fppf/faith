@@ -1,8 +1,6 @@
-use std::borrow::BorrowMut;
-
-use hash::Map;
-use hir::{CaseArm, Expr, Ident, Pat, PatKind};
-use itertools::Itertools;
+use base::hash::Map;
+use hir::{CaseArm, Expr, Pat, PatKind};
+use span::Ident;
 
 use crate::{lower::LoweringContext, mir::Label};
 
@@ -101,7 +99,7 @@ impl<'hir> Matrix<'hir> {
     fn bind_variable_patterns(&mut self) {
         for row in self.rows.iter_mut() {
             row.entries.retain(|e| {
-                if let PatKind::Var(id) = e.pat.kind {
+                if let PatKind::Var(id, _) = e.pat.kind {
                     row.body.bindings.push((id, e.id));
                     false
                 } else {

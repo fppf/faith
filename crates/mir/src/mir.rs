@@ -1,15 +1,14 @@
-use hash::Map;
-use index::IndexVec;
+use base::{hash::Map, index::IndexVec};
 use span::Sym;
 
 use crate::match_compile::DecisionTree;
 
-index::newtype_index! {
-    pub struct MirId = u32;
+base::newtype_index! {
+    pub struct MirId {}
 }
 
-index::newtype_index! {
-    pub struct Label = u32;
+base::newtype_index! {
+    pub struct Label {}
 }
 
 pub const MAIN_LABEL: Label = Label::ZERO;

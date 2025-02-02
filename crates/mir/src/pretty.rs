@@ -5,11 +5,11 @@ use std::{
 
 use crate::mir::{Expr, Label, Module};
 
-use pp::*;
+use base::pp::*;
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "l{}", Superscript(self.as_raw()))
+        write!(f, "l{}", Superscript(self.as_u32()))
     }
 }
 
@@ -47,7 +47,9 @@ impl PrintState for MirPrinter {}
 
 impl MirPrinter {
     fn new() -> Self {
-        MirPrinter { pp: Printer::new() }
+        MirPrinter {
+            pp: Printer::default(),
+        }
     }
 
     fn to_string<F>(f: F) -> String
@@ -110,7 +112,7 @@ impl MirPrinter {
                 });
                 self.word(")");
             }
-            Expr::Case(l, tree) => {
+            Expr::Case(l, _tree) => {
                 self.cbox(0);
                 self.ibox(0);
                 self.word_space("case");
