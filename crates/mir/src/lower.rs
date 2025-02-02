@@ -281,10 +281,13 @@ impl<'hir> LoweringContext<'hir> {
             ExprKind::Path(p) | ExprKind::Constructor(p) => {
                 mir::Expr::Label(self.get_path_label(p))
             }
-            ExprKind::External(..) | ExprKind::Vector(..) => todo!(),
+            ExprKind::External(s, _) => mir::Expr::External(s),
             ExprKind::Lit(l) => mir::Expr::Lit(l),
             ExprKind::Tuple(es) => {
                 mir::Expr::Tuple(es.iter().map(|&e| self.lower_expr(e)).collect())
+            }
+            ExprKind::Vector(es) => {
+                mir::Expr::Vector(es.iter().map(|&e| self.lower_expr(e)).collect())
             }
             ExprKind::Lambda(lambda) => self.lower_lambda(lambda),
             ExprKind::Ann(e, _) => self.lower_expr(e),
