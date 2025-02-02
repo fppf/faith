@@ -183,6 +183,17 @@ pub enum Lit {
     Str(Sym),
 }
 
+impl Lit {
+    pub fn base_type(&self) -> BaseType {
+        match self {
+            Lit::Unit => BaseType::Unit,
+            Lit::Bool(_) => BaseType::Bool,
+            Lit::Str(_) => BaseType::Str,
+            Lit::Int32(_) => BaseType::Int32,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TypeDeclGroup<'hir> {
     pub decls: &'hir [TypeDecl<'hir>],
