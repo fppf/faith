@@ -450,28 +450,30 @@ impl<'hir> Ty<'hir> {
         vars.acc
     }
 
-    pub fn subst_uni_var(self, arena: &'hir Arena<'hir>, subs: &Map<UniVarId, Self>) -> Self {
-        struct Subs<'a, 'hir> {
-            arena: &'hir Arena<'hir>,
-            subs: &'a Map<UniVarId, Ty<'hir>>,
+    pub fn subst_uni_var(self, arena: &'hir Arena<'hir>, var: UniVar, typ: Self) -> Self {
+        struct Subs<'a> {
+            arena: &'a Arena<'a>,
+            var: UniVar,
+            typ: Ty<'a>,
         }
 
-        impl<'hir> Folder<'hir, Ty<'hir>> for Subs<'_, 'hir> {
-            fn arena(&self) -> &'hir Arena<'hir> {
+        impl<'a> Folder<'a, Ty<'a>> for Subs<'a> {
+            fn arena(&self) -> &'a Arena<'a> {
                 self.arena
             }
 
-            fn fold(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
+            fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
                 if let TyKind::Uni(var) = typ.kind()
-                    && let Some(&other) = self.subs.get(&var.id)
+                    && var.id == self.var.id
                 {
-                    return other;
+                    self.typ
+                } else {
+                    typ.fold_with(self)
                 }
-                typ.fold_with(self)
             }
         }
 
-        Subs { arena, subs }.fold(self)
+        Subs { arena, var, typ }.fold(self)
     }
 }
 

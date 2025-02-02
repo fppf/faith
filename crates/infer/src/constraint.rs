@@ -503,10 +503,11 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
             (TyKind::Var(a), TyKind::Var(b)) if a.name.sym == b.name.sym => {
                 Constraint::equal(r1, r2)
             }
-            (TyKind::Uni(a), TyKind::Uni(_)) if subs.occurs(a.id, r2) => Constraint::equal(
-                l2,
-                r2.subst_uni_var(subs.arena, &Map::from_iter([(a.id, r1)])),
-            ),
+            (TyKind::Uni(a), TyKind::Uni(_)) if subs.occurs(a.id, r2) => {
+                //subs.insert(a.id, r1);
+                //Constraint::equal(l2, subs.apply(r2))
+                Constraint::equal(l2, r2.subst_uni_var(subs.arena, a, r1))
+            }
             (_, _) => return None,
         })
     }
