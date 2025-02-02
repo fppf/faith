@@ -1,7 +1,9 @@
 -- traits, one day? :)
 
-external print : str -> () = "$print"
-external println : str -> () = "$println"
+mod io = {
+   external print : str -> () = "$print"
+   external println : str -> () = "$println"
+}
 
 mod i32 = {
    external (+) : i32 -> i32 -> i32 = "$i32_add"
@@ -17,10 +19,8 @@ mod bool = {
    }
 }
 
-mod std = {
-   mod vec = import "vec.fth"
-   mod list = import "list.fth"
-   mod option = import "option.fth"
-   mod either = import "either.fth"
-}
+ mod vec = import "vec.fth"
+ mod list = import "list.fth"
+ mod option = import "option.fth"
+ mod either = import "either.fth"
 

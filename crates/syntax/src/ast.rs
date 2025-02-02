@@ -109,7 +109,7 @@ pub enum Item<'ast> {
 pub enum ModExpr<'ast> {
     Path(Path<'ast>),
     Struct(&'ast [Sp<Item<'ast>>]),
-    Import(Ident),
+    Import(&'ast std::path::Path),
 }
 
 #[derive(Clone, Copy, Debug)]

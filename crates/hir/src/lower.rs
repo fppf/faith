@@ -1,7 +1,6 @@
 use std::{
     fmt,
     ops::{Index, IndexMut},
-    ptr::slice_from_raw_parts_mut,
 };
 
 use base::{
@@ -177,6 +176,9 @@ struct LoweringContext<'hir> {
 
     // Which module (comp unit or inline) we are processing.
     current_module_id: Option<ModuleId>,
+
+    // If we're currently importing std.
+    in_std_import: bool,
 }
 
 impl<'hir> LoweringContext<'hir> {
@@ -192,33 +194,8 @@ impl<'hir> LoweringContext<'hir> {
             module_stack: Vec::new(),
             locals: ScopedMap::default(),
             current_module_id: None,
+            in_std_import: false,
         }
-    }
-
-    fn lower_program<'ast>(
-        mut self,
-        program: &'ast ast::Program<'ast>,
-    ) -> Result<&'hir hir::Program<'hir>, LowerError> {
-        let source_id = program.unit.source_id;
-        let module = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
-        let (unit, main) = self.with_module(module, move |self_| {
-            let items = self_.lower_items(program.unit.items)?;
-            let main = self_.lower_expr(program.main)?;
-            let unit = self_.arena.alloc(hir::CompUnit { source_id, items });
-            Ok((unit, main))
-        })?;
-        Ok(self.arena.alloc(hir::Program {
-            unit,
-            main,
-            imports: self
-                .imports
-                .iter()
-                .map(|(&source_id, &(_, comp_unit))| (source_id, comp_unit))
-                .collect(),
-            values: self.values,
-            constructors: self.constructors,
-            types: self.types,
-        }))
     }
 
     fn next_hir_id(&mut self) -> HirId {
@@ -315,20 +292,76 @@ impl<'hir> LoweringContext<'hir> {
         Err(LowerError::Resolve(path.to_string(), path.span()))
     }
 
+    fn std_import_item(
+        &mut self,
+        seen: &mut Seen,
+        items: &mut hir::Items<'hir>,
+    ) -> Result<(), LowerError> {
+        let mod_ident = Ident::new(Sym::intern("std"), Span::dummy());
+
+        let import_path = std::path::Path::new("./lib/std.fth");
+
+        let syntax_arena = syntax::Arena::default();
+
+        let import_item = syntax_arena.alloc(Sp::new(
+            ast::Item::Mod(
+                mod_ident,
+                syntax_arena.alloc(Sp::new(ast::ModExpr::Import(import_path), Span::dummy())),
+            ),
+            Span::dummy(),
+        ));
+
+        self.in_std_import = true;
+        self.lower_item(import_item, seen, items)?;
+        self.in_std_import = false;
+        Ok(())
+    }
+
+    fn lower_program<'ast>(
+        mut self,
+        program: &'ast ast::Program<'ast>,
+    ) -> Result<&'hir hir::Program<'hir>, LowerError> {
+        let source_id = program.unit.source_id;
+        let module = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
+        let (unit, main) = self.with_module(module, move |self_| {
+            let items = self_.lower_items(true, program.unit.items)?;
+            let main = self_.lower_expr(program.main)?;
+            let unit = self_.arena.alloc(hir::CompUnit { source_id, items });
+            Ok((unit, main))
+        })?;
+        Ok(self.arena.alloc(hir::Program {
+            unit,
+            main,
+            imports: self
+                .imports
+                .iter()
+                .map(|(&source_id, &(_, comp_unit))| (source_id, comp_unit))
+                .collect(),
+            values: self.values,
+            constructors: self.constructors,
+            types: self.types,
+        }))
+    }
+
     fn lower_comp_unit<'ast>(
         &mut self,
         unit: &ast::CompUnit<'ast>,
     ) -> Result<(ModuleId, &'hir hir::CompUnit<'hir>), LowerError> {
         let source_id = unit.source_id;
         let module_id = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
-        let items = self.with_module(module_id, |self_| self_.lower_items(unit.items))?;
+        let items = self.with_module(module_id, |self_| {
+            self_.lower_items(!self_.in_std_import, unit.items)
+        })?;
         Ok((
             module_id,
             self.arena.alloc(hir::CompUnit { source_id, items }),
         ))
     }
 
-    fn lower_import(&mut self, import_path: Ident) -> Result<(ModuleId, SourceId), LowerError> {
+    fn lower_import(
+        &mut self,
+        import_path: &std::path::Path,
+    ) -> Result<(ModuleId, SourceId), LowerError> {
         let mut file_path = std::path::PathBuf::new();
         if let Some(base_path) =
             span::with_source_map(|sm| sm[self.current_comp_unit()].path.clone())
@@ -336,7 +369,7 @@ impl<'hir> LoweringContext<'hir> {
             file_path.push(base_path.parent().unwrap());
         }
 
-        file_path.push(std::path::PathBuf::from(import_path.sym.to_string()));
+        file_path.push(import_path);
         Ok(
             if let Some(source_id) =
                 span::with_source_map(|sm| sm.lookup_existing_source_id(&file_path))
@@ -359,10 +392,14 @@ impl<'hir> LoweringContext<'hir> {
 
     fn lower_items<'ast>(
         &mut self,
+        import_std: bool,
         items: &'ast [Sp<ast::Item<'ast>>],
     ) -> Result<&'hir hir::Items<'hir>, LowerError> {
         let mut seen = Seen::default();
         let mut hir_items = hir::Items::default();
+        if import_std {
+            self.std_import_item(&mut seen, &mut hir_items)?;
+        }
         for item in items {
             self.lower_item(item, &mut seen, &mut hir_items)?;
         }
@@ -411,9 +448,8 @@ impl<'hir> LoweringContext<'hir> {
                                     return;
                                 }
                             }
-                            _ => (),
+                            _ => expr.visit_with(self),
                         }
-                        expr.visit_with(self);
                     }
                 }
 
@@ -463,7 +499,7 @@ impl<'hir> LoweringContext<'hir> {
                         let module_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
                         self.current_module_mut().modules.insert(id, module_id);
                         let items =
-                            self.with_module(module_id, |self_| self_.lower_items(items))?;
+                            self.with_module(module_id, |self_| self_.lower_items(false, items))?;
                         hir::ModExprKind::Struct(items)
                     }
                     ast::ModExpr::Import(path) => {

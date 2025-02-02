@@ -912,6 +912,7 @@ fn mod_expr_struct<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>>
 fn mod_expr_import<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
     let m = p.start();
     p.expect(KW_IMPORT)?;
-    let path_str = lit_str(p)?;
-    Ok(Sp::new(ModExpr::Import(path_str), p.end(m)))
+    let path = lit_str(p)?;
+    let path = std::path::Path::new(p.arena.alloc_str(&path.to_string()));
+    Ok(Sp::new(ModExpr::Import(path), p.end(m)))
 }

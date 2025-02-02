@@ -1,6 +1,6 @@
 use std::{fmt, hash::Hash, marker::PhantomData};
 
-use base::hash::{IndexSet, Map};
+use base::hash::IndexSet;
 use hir::*;
 
 use crate::{TypeChecker, error::TypeUnifyError, substitution::Substitution};
