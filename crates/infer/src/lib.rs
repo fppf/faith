@@ -74,7 +74,7 @@ impl TypeVarSource {
     }
 }
 
-/// Split a an application into (head, args). Can only be called on things which
+/// Split an application into (head, args). Can only be called on things which
 /// "look like applications", see note in `infer_app`.
 fn split_app(expr: Expr<'_>) -> (Expr<'_>, &[ExprArg<'_>]) {
     match *expr.kind() {
@@ -141,29 +141,30 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn instantiate(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
-        struct Instantiator<'a, 'hir> {
-            arena: &'hir Arena<'hir>,
-            subs: &'a Map<Ident, Ty<'hir>>,
+        struct Instantiator<'a> {
+            arena: &'a Arena<'a>,
+            subs: Map<Ident, Ty<'a>>,
         }
 
-        impl<'hir> Folder<'hir, Ty<'hir>> for Instantiator<'_, 'hir> {
-            fn arena(&self) -> &'hir Arena<'hir> {
+        impl<'a> Folder<'a, Ty<'a>> for Instantiator<'a> {
+            fn arena(&self) -> &'a Arena<'a> {
                 self.arena
             }
 
-            fn fold(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
+            fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
                 if let TyKind::Var(var) = typ.kind()
                     && let Some(&other) = self.subs.get(&var.name)
                 {
-                    return other;
+                    other
+                } else {
+                    typ.fold_with(self)
                 }
-                typ.fold_with(self)
             }
         }
 
         Instantiator {
             arena: self.arena,
-            subs: &typ
+            subs: typ
                 .type_vars()
                 .iter()
                 .map(|&var| (var.name, self.fresh_var()))
