@@ -35,6 +35,7 @@ pub enum Expr {
     Lambda(Vec<Label>, Box<Expr>),
     App(Box<Expr>, Vec<Expr>),
     Tuple(Vec<Expr>),
+    Vector(Box<Expr>),
     Let(Label, Box<Expr>, Box<Expr>),
     Case(Label, DecisionTree),
     If(Box<Expr>, Box<Expr>, Box<Expr>),

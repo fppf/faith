@@ -38,6 +38,7 @@ pub struct Program<'hir> {
     pub types: HirMap<TypeDecl<'hir>>,
     pub unit: &'hir CompUnit<'hir>,
     pub main: Expr<'hir>,
+    pub last_hir_id: HirId,
 }
 
 #[derive(Clone, Copy, Debug)]

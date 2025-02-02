@@ -130,7 +130,7 @@ impl<'a, 'hir> Compiler<'a, 'hir> {
 
         let branch_var = matrix.branch_var().expect("Could not get branching var");
 
-        let label = self.ctx.get_id_label(branch_var);
+        let label = todo!(); // self.ctx.get_id_label(branch_var);
 
         let mut cases = Vec::new();
 

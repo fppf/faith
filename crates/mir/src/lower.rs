@@ -1,7 +1,7 @@
 use base::{hash::Map, index::Idx};
 use hir::{
-    Arena, CaseArm, CompUnit, Expr, ExprArg, ExprKind, Lambda, ModExpr, ModExprKind, Pat, PatKind,
-    Path, Program,
+    Arena, CaseArm, CompUnit, Expr, ExprArg, ExprKind, HirId, Lambda, ModExpr, ModExprKind, Pat,
+    PatKind, Path, Program,
 };
 use infer::InferData;
 use span::{Ident, Span, Sym};
@@ -16,28 +16,40 @@ pub fn lower<'hir>(
     infer_data: InferData<'hir>,
     program: &'hir Program<'hir>,
 ) -> mir::Module {
-    let mut ctx = LoweringContext::new(arena, infer_data);
-    ctx.lower_program(program);
-    ctx.module
+    LoweringContext::new(arena, program, infer_data).lower()
 }
 
 pub(crate) struct LoweringContext<'hir> {
     module: mir::Module,
-    ident_to_label: Map<Ident, Label>,
+    hir_id_to_label: Map<HirId, Label>,
     label: Label,
+    program: &'hir Program<'hir>,
     pub infer_data: InferData<'hir>,
+    hir_id: HirId,
     hir_arena: &'hir Arena<'hir>,
 }
 
 impl<'hir> LoweringContext<'hir> {
-    fn new(hir_arena: &'hir Arena<'hir>, infer_data: InferData<'hir>) -> Self {
+    fn new(
+        hir_arena: &'hir Arena<'hir>,
+        program: &'hir Program<'hir>,
+        infer_data: InferData<'hir>,
+    ) -> Self {
         Self {
             module: Module::default(),
-            ident_to_label: Map::default(),
+            hir_id_to_label: Map::default(),
             label: Label::new(MAIN_LABEL.index() + 1),
+            program,
             infer_data,
+            hir_id: program.last_hir_id.plus(1),
             hir_arena,
         }
+    }
+
+    fn next_hir_id(&mut self) -> HirId {
+        let next = self.hir_id;
+        self.hir_id = self.hir_id + 1;
+        next
     }
 
     fn next_label(&mut self) -> Label {
@@ -46,45 +58,42 @@ impl<'hir> LoweringContext<'hir> {
         label
     }
 
-    pub fn insert_temp(&mut self) -> (Ident, Label) {
+    pub fn insert_temp(&mut self) -> (Path<'hir>, Label) {
         let label = self.next_label();
         let id = Ident::new(
             Sym::intern(&format!("~tmp{}", label.index())),
             Span::dummy(),
         );
-        self.ident_to_label.insert(id, label);
-        (id, label)
+        let hir_id = self.next_hir_id();
+        self.hir_id_to_label.insert(hir_id, label);
+        let path = self
+            .hir_arena
+            .path(id, [], Span::dummy(), hir::Res::Local(hir_id));
+        (path, label)
     }
 
-    fn insert_id(&mut self, id: Ident) -> Label {
+    fn insert_hir_id(&mut self, hid_id: HirId) -> Label {
         let label = self.next_label();
-        self.ident_to_label.insert(id, label);
+        self.hir_id_to_label.insert(hid_id, label);
         label
     }
 
-    fn get_id_label_opt(&self, id: Ident) -> Option<Label> {
-        self.ident_to_label.get(&id).copied()
+    fn get_id_label_opt(&self, hir_id: HirId) -> Option<Label> {
+        self.hir_id_to_label.get(&hir_id).copied()
     }
 
-    pub fn get_id_label(&self, id: Ident) -> Label {
-        self.get_id_label_opt(id).unwrap()
+    pub fn get_id_label(&self, hir_id: HirId) -> Label {
+        self.get_id_label_opt(hir_id).unwrap()
     }
 
     fn insert_path(&mut self, path: Path<'hir>) -> Label {
-        let id = todo!(); //*self.infer_data.resolved_paths.get(&path).unwrap();
-        self.insert_id(id)
+        let hir_id = path.res().hir_id();
+        self.insert_hir_id(hir_id)
     }
 
     fn get_path_label_opt(&self, path: Path<'hir>) -> Option<Label> {
-        let id = todo!();
-        /*self
-        .infer_data
-        .resolved_paths
-        .get(&path)
-        .copied()
-        .unwrap_or(path.id());
-        */
-        self.get_id_label_opt(id)
+        let hir_id = path.res().hir_id();
+        self.get_id_label_opt(hir_id)
     }
 
     fn get_path_label(&self, path: Path<'hir>) -> Label {
@@ -97,10 +106,11 @@ impl<'hir> LoweringContext<'hir> {
         self.module.label_to_mir_id.insert(label, mir_id);
     }
 
-    fn lower_program(&mut self, program: &'hir Program<'hir>) {
-        self.lower_comp_unit(program.unit);
-        let main = self.lower_expr(program.main);
+    fn lower(mut self) -> mir::Module {
+        self.lower_comp_unit(self.program.unit);
+        let main = self.lower_expr(self.program.main);
         self.push_item(MAIN_LABEL, main);
+        self.module
     }
 
     fn lower_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) {
@@ -157,8 +167,8 @@ impl<'hir> LoweringContext<'hir> {
             PatKind::Wild => {
                 vec![(self.next_label(), self.lower_expr(expr))]
             }
-            PatKind::Var(id, _) => {
-                let label = self.insert_id(id);
+            PatKind::Var(_, hir_id) => {
+                let label = self.insert_hir_id(hir_id);
                 vec![(label, self.lower_expr(expr))]
             }
             PatKind::Ann(p, _) => self.lower_bind(p, expr),
@@ -170,9 +180,9 @@ impl<'hir> LoweringContext<'hir> {
                 let expr = match expr.kind() {
                     ExprKind::Path(_) | ExprKind::Lit(_) => expr,
                     _ => {
-                        let (id, label) = self.insert_temp();
+                        let (path, label) = self.insert_temp();
                         split.push((label, self.lower_expr(expr)));
-                        Expr::new(self.hir_arena, ExprKind::Path(todo!()), Span::dummy())
+                        Expr::new(self.hir_arena, ExprKind::Path(path), Span::dummy())
                     }
                 };
 
@@ -216,7 +226,7 @@ impl<'hir> LoweringContext<'hir> {
         // There is no need to hoist paths, since we can just replace them directly with labels.
 
         fn replace_variable_pattern<'a>(pat: &'a Pat<'a>) -> (Pat<'a>, Option<Pat<'a>>) {
-            if let PatKind::Var(id, _) = pat.kind {
+            if let PatKind::Var(..) = pat.kind {
                 (
                     Pat {
                         kind: PatKind::Wild,
@@ -240,9 +250,9 @@ impl<'hir> LoweringContext<'hir> {
                     }
                 }
             }
-            let (id, label) = ctx.insert_temp();
-            let hoisted_scrutinee = Expr::new(ctx.hir_arena, ExprKind::Path(todo!()), id.span);
-            (label, hoisted_scrutinee, id)
+            let (path, label) = ctx.insert_temp();
+            let hoisted_scrutinee = ctx.hir_arena.expr(ExprKind::Path(path), path.span());
+            (label, hoisted_scrutinee, path.id())
         }
 
         let (label, hoisted_scrutinee, id) = hoist_scrutinee(self, scrutinee);
@@ -268,9 +278,10 @@ impl<'hir> LoweringContext<'hir> {
 
     fn lower_expr(&mut self, expr: Expr<'hir>) -> mir::Expr {
         match *expr.kind() {
-            ExprKind::Path(p) => mir::Expr::Label(self.get_path_label(p)),
+            ExprKind::Path(p) | ExprKind::Constructor(p) => {
+                mir::Expr::Label(self.get_path_label(p))
+            }
             ExprKind::External(..) | ExprKind::Vector(..) => todo!(),
-            ExprKind::Constructor(p) => todo!(),
             ExprKind::Lit(l) => mir::Expr::Lit(l),
             ExprKind::Tuple(es) => {
                 mir::Expr::Tuple(es.iter().map(|&e| self.lower_expr(e)).collect())
@@ -342,11 +353,11 @@ impl<'hir> LoweringContext<'hir> {
         for &arg in lambda.args {
             let label = match arg.kind {
                 PatKind::Wild => self.next_label(),
-                PatKind::Var(id, _) => self.insert_id(id),
+                PatKind::Var(_, hir_id) => self.insert_hir_id(hir_id),
                 PatKind::Lit(_) => unreachable!("literal in lambda pattern"),
                 _ => {
-                    let (id, label) = self.insert_temp();
-                    let expr = Expr::new(self.hir_arena, ExprKind::Path(todo!()), Span::dummy());
+                    let (path, label) = self.insert_temp();
+                    let expr = self.hir_arena.expr(ExprKind::Path(path), Span::dummy());
                     binds.push((arg, expr));
                     label
                 }

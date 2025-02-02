@@ -340,6 +340,7 @@ impl<'hir> LoweringContext<'hir> {
             values: self.values,
             constructors: self.constructors,
             types: self.types,
+            last_hir_id: self.hir_id,
         }))
     }
 
