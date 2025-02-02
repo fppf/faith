@@ -298,15 +298,15 @@ impl<'hir> LoweringContext<'hir> {
         items: &mut hir::Items<'hir>,
     ) -> Result<(), LowerError> {
         let mod_ident = Ident::new(Sym::intern("std"), Span::dummy());
-
-        let import_path = std::path::Path::new("./lib/std.fth");
+        let import_path =
+            std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into()))
+                .join("std.fth");
 
         let syntax_arena = syntax::Arena::default();
-
         let import_item = syntax_arena.alloc(Sp::new(
             ast::Item::Mod(
                 mod_ident,
-                syntax_arena.alloc(Sp::new(ast::ModExpr::Import(import_path), Span::dummy())),
+                syntax_arena.alloc(Sp::new(ast::ModExpr::Import(&import_path), Span::dummy())),
             ),
             Span::dummy(),
         ));
