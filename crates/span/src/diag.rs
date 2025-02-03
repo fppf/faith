@@ -83,23 +83,19 @@ pub fn report(test: bool) -> bool {
     };
 
     with_diagnostic_store(|store| {
-        if store.diags.iter().any(Diagnostic::should_emit) {
-            let mut error = false;
-            crate::with_source_map(|sm| {
-                for diag in &store.diags {
-                    term_emit(&mut w, &config, sm, &convert(sm, diag.clone())).unwrap();
-                    error |= diag.level == Level::Error;
-                }
-            });
-
-            if let ReportWriter::Test(w) = w {
-                log::error!("{}", String::from_utf8_lossy(&w.into_inner()));
+        let mut error = false;
+        crate::with_source_map(|sm| {
+            for diag in &store.diags {
+                term_emit(&mut w, &config, sm, &convert(sm, diag.clone())).unwrap();
+                error |= diag.level == Level::Error;
             }
+        });
 
-            error
-        } else {
-            false
+        if let ReportWriter::Test(w) = w {
+            log::error!("{}", String::from_utf8_lossy(&w.into_inner()));
         }
+
+        error
     })
 }
 
@@ -154,10 +150,6 @@ impl Diagnostic {
     pub fn with_labels(mut self, mut labels: Vec<Label>) -> Self {
         self.labels.append(&mut labels);
         self
-    }
-
-    fn should_emit(&self) -> bool {
-        self.level == Level::Error || self.level == Level::Warn
     }
 }
 
