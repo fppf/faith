@@ -103,7 +103,9 @@ impl<'hir> TypeChecker<'hir> {
         self.infer_comp_unit(self.program.unit)?;
         let main_typ = self.infer_solve_expr(self.program.main)?;
         log::trace!("main : {main_typ}");
-        self.zonk();
+        for (_, t) in self.infer_data.expr_types.iter_mut() {
+            *t = self.subs.apply(*t);
+        }
         Ok(self.infer_data)
     }
 
@@ -214,6 +216,24 @@ impl<'hir> TypeChecker<'hir> {
         skolemized
     }
 
+    fn solve_current(&mut self) -> Result<(), InferError<'hir>> {
+        let constraints: Vec<_> = self.constraints.drain(..).collect();
+        let residual = constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
+        if residual.is_empty() {
+            Ok(())
+        } else {
+            Err(InferError::ResidualConstraints(residual))
+        }
+    }
+
+    fn infer_solve_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+        let res = self.infer_expr(expr)?;
+        self.solve_current()?;
+        let res = self.generalize(res);
+        self.infer_data.expr_types.insert(expr, res);
+        Ok(res)
+    }
+
     fn infer_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) -> Result<(), InferError<'hir>> {
         let mexpr = self.arena.alloc(ModExpr {
             kind: ModExprKind::Struct(unit.items),
@@ -267,8 +287,27 @@ impl<'hir> TypeChecker<'hir> {
     /// Infer a type for an expression.
     fn infer_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         let res = match *expr.kind() {
+            // NB. Applications are either function calls (such as `(f a b ...)`)
+            //     or "0-arity" applications, i.e., paths.
             ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(..) => {
-                self.infer_app(expr)?
+                let (head, args) = split_app(expr);
+                let head_typ = match *head.kind() {
+                    ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
+                    _ => self.infer_expr(head),
+                }?;
+                let mut typ = self.instantiate(head_typ);
+                for arg in args {
+                    if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
+                        match *arg {
+                            ExprArg::Expr(e) => self.check_expr(e, arg_typ)?,
+                            ExprArg::Type(_t) => todo!("VTA"),
+                        }
+                        typ = ret_typ;
+                    } else {
+                        break;
+                    }
+                }
+                typ
             }
             ExprKind::External(_, typ) => typ,
             ExprKind::Lit(l) => self.type_from_lit(l, expr.span()),
@@ -348,31 +387,6 @@ impl<'hir> TypeChecker<'hir> {
         } else {
             self.infer_expr(body)
         }
-    }
-
-    /// Infer the type of an application.
-    ///
-    /// NB. Here, an application can be either a function call (such as `(f a b ...)`) or simply
-    /// a "0-arity" application, like a variable or path.
-    fn infer_app(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        let (head, args) = split_app(expr);
-        let head_typ = match *head.kind() {
-            ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
-            _ => self.infer_expr(head),
-        }?;
-        let mut typ = self.instantiate(head_typ);
-        for arg in args {
-            if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
-                match *arg {
-                    ExprArg::Expr(e) => self.check_expr(e, arg_typ)?,
-                    ExprArg::Type(_t) => todo!("VTA"),
-                }
-                typ = ret_typ;
-            } else {
-                break;
-            }
-        }
-        Ok(typ)
     }
 
     /// Infer the type of a path by looking it up in the environment.
@@ -461,7 +475,10 @@ impl<'hir> TypeChecker<'hir> {
 
             // TODO. these branches probably aren't necessary
             (ExprKind::Lambda(lambda), TyKind::Uni(_)) => {
-                self.check_lambda_var(lambda.args, lambda.body, expected)?
+                let mut arg_typs = Vec::with_capacity(lambda.args.len());
+                let ret_typ =
+                    self.check_lambda_var(lambda.args, lambda.body, expected, &mut arg_typs)?;
+                self.constrain(expected, Ty::n_arrow(self.arena, arg_typs, ret_typ));
             }
             (ExprKind::Lambda(lambda), TyKind::Arrow(..)) => {
                 self.check_lambda_arrow(lambda.args, lambda.body, expected)?
@@ -493,21 +510,7 @@ impl<'hir> TypeChecker<'hir> {
         Ok(())
     }
 
-    /// Check a lambda expression `(\args -> body)` against a unification variable.
     fn check_lambda_var(
-        &mut self,
-        args: &'hir [Pat<'hir>],
-        body: Expr<'hir>,
-        var: Ty<'hir>,
-    ) -> Result<(), InferError<'hir>> {
-        let mut arg_typs = Vec::with_capacity(args.len());
-        let ret_typ = self.check_lambda_var_inner(args, body, var, &mut arg_typs)?;
-        self.constrain(var, Ty::n_arrow(self.arena, arg_typs, ret_typ));
-        Ok(())
-    }
-
-    // Helper for `check_lambda_var`.
-    fn check_lambda_var_inner(
         &mut self,
         args: &'hir [Pat<'hir>],
         body: Expr<'hir>,
@@ -517,7 +520,7 @@ impl<'hir> TypeChecker<'hir> {
         if let Some((first, rest)) = args.split_first() {
             let typ = self.infer_pat(first)?;
             arg_typs.push(typ);
-            self.check_lambda_var_inner(rest, body, typ, arg_typs)
+            self.check_lambda_var(rest, body, typ, arg_typs)
         } else {
             self.check_expr(body, var)?;
             Ok(var)
@@ -572,29 +575,5 @@ impl<'hir> TypeChecker<'hir> {
             }
         }
         Ok(())
-    }
-
-    fn solve_current(&mut self) -> Result<(), InferError<'hir>> {
-        let constraints: Vec<_> = self.constraints.drain(..).collect();
-        let residual = constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
-        if residual.is_empty() {
-            Ok(())
-        } else {
-            Err(InferError::ResidualConstraints(residual))
-        }
-    }
-
-    fn infer_solve_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        let res = self.infer_expr(expr)?;
-        self.solve_current()?;
-        let res = self.generalize(res);
-        self.infer_data.expr_types.insert(expr, res);
-        Ok(res)
-    }
-
-    fn zonk(&mut self) {
-        for (_, t) in self.infer_data.expr_types.iter_mut() {
-            *t = self.subs.apply(*t);
-        }
     }
 }
