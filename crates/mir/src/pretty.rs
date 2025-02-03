@@ -70,12 +70,24 @@ impl MirPrinter {
         match expr {
             Expr::Label(l) => self.print_label(*l),
             Expr::Lit(l) => self.word(l.to_string()),
+            Expr::External(s) => {
+                self.word("external");
+                self.space();
+                self.word(s.as_str().to_string());
+            }
             Expr::Tuple(es) => {
                 self.popen();
                 self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
                     pp.print_expr(e)
                 });
                 self.pclose();
+            }
+            Expr::Vector(es) => {
+                self.word("[");
+                self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
+                    pp.print_expr(e)
+                });
+                self.word("]");
             }
             Expr::Let(l, e1, e2) => {
                 self.word_space("let");
