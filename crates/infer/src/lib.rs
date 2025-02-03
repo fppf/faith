@@ -74,16 +74,6 @@ impl TypeVarSource {
     }
 }
 
-/// Split an application into (head, args). Can only be called on things which
-/// "look like applications", see note in `infer_app`.
-fn split_app(expr: Expr<'_>) -> (Expr<'_>, &[ExprArg<'_>]) {
-    match *expr.kind() {
-        ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
-        ExprKind::App(_, h, args) => (h, args),
-        _ => unreachable!(),
-    }
-}
-
 impl<'hir> TypeChecker<'hir> {
     fn new(arena: &'hir Arena<'hir>, program: &'hir Program<'hir>) -> Self {
         Self {
@@ -289,7 +279,14 @@ impl<'hir> TypeChecker<'hir> {
         let res = match *expr.kind() {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
-            ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(..) => {
+            ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
+                fn split_app(expr: Expr<'_>) -> (Expr<'_>, &[ExprArg<'_>]) {
+                    match *expr.kind() {
+                        ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
+                        ExprKind::App(_, h, args) => (h, args),
+                        _ => unreachable!(),
+                    }
+                }
                 let (head, args) = split_app(expr);
                 let head_typ = match *head.kind() {
                     ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
@@ -392,8 +389,8 @@ impl<'hir> TypeChecker<'hir> {
     /// Infer the type of a path by looking it up in the environment.
     fn infer_path(&mut self, path: Path<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         let hir_id = path.res().hir_id();
-        match self.env.get(&hir_id) {
-            Some(typ) => Ok(*typ),
+        Ok(match self.env.get(&hir_id) {
+            Some(typ) => *typ,
             None => {
                 let typ = if let Some(cons) = self.program.constructors.get(&hir_id) {
                     cons.typ
@@ -419,9 +416,9 @@ impl<'hir> TypeChecker<'hir> {
                     }
                 };
                 self.env.insert(hir_id, typ);
-                Ok(typ)
+                typ
             }
-        }
+        })
     }
 
     /// Infer a type for a pattern.
