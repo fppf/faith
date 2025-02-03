@@ -9,7 +9,10 @@ mod token;
 
 use lexer::Lexer;
 use parser::Parser;
-use span::diag::{Diagnostic, Level};
+use span::{
+    Ident, Sp, Span, Sym,
+    diag::{Diagnostic, Level},
+};
 
 // An ephemeral AST arena, constructed to parse a single compilation unit
 // on demand and dropped after the AST fragment is lowered to HIR.
@@ -50,6 +53,31 @@ pub fn parse_str_program_in<'ast>(
     })
 }
 
+pub fn std_import<'ast>(arena: &'ast Arena<'ast>) -> Result<&'ast Sp<ast::Item<'ast>>, Diagnostic> {
+    let mod_ident = Ident::new(Sym::intern("std"), Span::dummy());
+    let import_path =
+        std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into())).join("std.fth");
+    let import_path = arena.alloc_str(&import_path.to_string_lossy());
+    let import_path = arena.alloc(std::path::Path::new(import_path));
+
+    if !import_path.exists() {
+        println!("here");
+        return Err(Diagnostic::new(Level::Warn).with_message(format!(
+            "cannot find standard library at '{}'",
+            import_path.display()
+        )));
+    }
+
+    let import_item = arena.alloc(Sp::new(
+        ast::Item::Mod(
+            mod_ident,
+            arena.alloc(Sp::new(ast::ModExpr::Import(import_path), Span::dummy())),
+        ),
+        Span::dummy(),
+    ));
+    Ok(import_item)
+}
+
 fn path_check(path: &std::path::Path) -> Result<(), Diagnostic> {
     match path.extension() {
         Some(ext) if ext != span::SRC_EXT => {
@@ -71,7 +99,7 @@ fn path_check(path: &std::path::Path) -> Result<(), Diagnostic> {
 
 fn map_load_error(e: span::LoadError) -> Diagnostic {
     Diagnostic::new(Level::Error).with_message(format!(
-        "could not load file {}: {}",
+        "could not load file '{}': {}",
         e.path.display(),
         e.err
     ))

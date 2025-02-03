@@ -320,23 +320,15 @@ impl<'hir> LoweringContext<'hir> {
         seen: &mut Seen,
         items: &mut hir::Items<'hir>,
     ) -> Result<(), LowerError> {
-        let mod_ident = Ident::new(Sym::intern("std"), Span::dummy());
-        let import_path =
-            std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into()))
-                .join("std.fth");
-
-        let syntax_arena = syntax::Arena::default();
-        let import_item = syntax_arena.alloc(Sp::new(
-            ast::Item::Mod(
-                mod_ident,
-                syntax_arena.alloc(Sp::new(ast::ModExpr::Import(&import_path), Span::dummy())),
-            ),
-            Span::dummy(),
-        ));
-
-        self.in_std_import = true;
-        self.lower_item(import_item, seen, items)?;
-        self.in_std_import = false;
+        let arena = syntax::Arena::default();
+        match syntax::std_import(&arena) {
+            Ok(import_item) => {
+                self.in_std_import = true;
+                self.lower_item(import_item, seen, items)?;
+                self.in_std_import = false;
+            }
+            Err(diag) => span::diag::emit(diag),
+        }
         Ok(())
     }
 

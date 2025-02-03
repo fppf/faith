@@ -83,10 +83,12 @@ pub fn report(test: bool) -> bool {
     };
 
     with_diagnostic_store(|store| {
-        if store.diags.iter().any(Diagnostic::is_error) {
+        if store.diags.iter().any(Diagnostic::should_emit) {
+            let mut error = false;
             crate::with_source_map(|sm| {
                 for diag in &store.diags {
                     term_emit(&mut w, &config, sm, &convert(sm, diag.clone())).unwrap();
+                    error |= diag.level == Level::Error;
                 }
             });
 
@@ -94,7 +96,7 @@ pub fn report(test: bool) -> bool {
                 log::error!("{}", String::from_utf8_lossy(&w.into_inner()));
             }
 
-            true
+            error
         } else {
             false
         }
@@ -154,8 +156,8 @@ impl Diagnostic {
         self
     }
 
-    fn is_error(&self) -> bool {
-        self.level == Level::Error
+    fn should_emit(&self) -> bool {
+        self.level == Level::Error || self.level == Level::Warn
     }
 }
 
