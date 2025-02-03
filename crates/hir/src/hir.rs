@@ -49,6 +49,7 @@ pub struct CompUnit<'hir> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Value<'hir> {
+    pub path: Path<'hir>,
     pub hir_id: HirId,
     pub expr: Expr<'hir>,
     pub recursive: bool,

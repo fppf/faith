@@ -72,7 +72,7 @@ impl MirPrinter {
             Expr::Lit(l) => self.word(l.to_string()),
             Expr::Tuple(es) => {
                 self.popen();
-                self.strsep(",", false, Breaks::Inconsistent, &es, |pp, e| {
+                self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
                     pp.print_expr(e)
                 });
                 self.pclose();
@@ -96,7 +96,7 @@ impl MirPrinter {
             }
             Expr::Lambda(args, body) => {
                 self.word("\\");
-                self.strsep("", false, Breaks::Inconsistent, &args, |pp, arg| {
+                self.strsep("", false, Breaks::Inconsistent, args, |pp, arg| {
                     pp.print_label(*arg)
                 });
                 self.space();
@@ -107,7 +107,7 @@ impl MirPrinter {
                 self.word("(");
                 self.print_expr(h);
                 self.space();
-                self.strsep("", false, Breaks::Inconsistent, &args, |pp, e| {
+                self.strsep("", false, Breaks::Inconsistent, args, |pp, e| {
                     pp.print_expr(e)
                 });
                 self.word(")");
@@ -123,7 +123,7 @@ impl MirPrinter {
                 self.end();
                 self.end();
             }
-            _ => todo!(),
+            _ => self.word("..."),
         }
         self.end();
     }

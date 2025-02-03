@@ -49,12 +49,9 @@ impl fmt::Display for Sym {
 }
 
 /// An identifier has an underlying `Sym` and a `Span`.
-/// The `stamp` is used to disambiguate identifiers with the same
-/// name but coming from different bindings.
 #[derive(Clone, Copy)]
 pub struct Ident {
     pub sym: Sym,
-    //pub stamp: u32,
     pub span: Span,
 }
 

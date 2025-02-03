@@ -1,3 +1,6 @@
+#![feature(let_chains)]
+#![allow(unused)]
+
 mod lower;
 mod match_compile;
 mod mir;

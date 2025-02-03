@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, hash::Hash};
 
 use base::arena::Interned;
 use span::{Ident, Span, Sym};
@@ -40,6 +40,25 @@ impl fmt::Display for Res {
 /// A qualified, resolved path.
 #[derive(Clone, Copy, Hash)]
 pub struct Path<'hir>(Interned<'hir, PathInner<'hir>>);
+
+#[cfg(test)]
+mod test {
+    use std::hash::{Hash, Hasher};
+
+    use crate::{Arena, DefKind, HirId, Res};
+    use base::hash::FxHasher;
+    use span::{Ident, Span, Sym};
+
+    #[test]
+    fn equality() {
+        let arena = Arena::default();
+        let id = Ident::new(Sym::intern("x"), Span::from(1..2));
+        let res = Res::Def(DefKind::Value, HirId::from_u32(1));
+        let p1 = arena.path(id, [id, id], Span::from(1..4), res);
+        let p2 = arena.path(id, [id, id], Span::from(2..4), res);
+        assert_eq!(p1, p2);
+    }
+}
 
 #[derive(Clone, Copy)]
 struct PathInner<'hir> {

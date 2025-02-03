@@ -89,7 +89,7 @@ impl<'hir> Matrix<'hir> {
             }
         }
         self.rows
-            .get(0)?
+            .first()?
             .entries
             .iter()
             .map(|e| e.id)
@@ -114,7 +114,7 @@ struct Compiler<'a, 'hir> {
     ctx: &'a LoweringContext<'hir>,
 }
 
-impl<'a, 'hir> Compiler<'a, 'hir> {
+impl<'hir> Compiler<'_, 'hir> {
     fn compile(&mut self, matrix: &mut Matrix<'hir>) -> DecisionTree {
         // If the matrix has no rows, then we vacuously fail.
         if matrix.rows.is_empty() {
@@ -130,7 +130,7 @@ impl<'a, 'hir> Compiler<'a, 'hir> {
 
         let branch_var = matrix.branch_var().expect("Could not get branching var");
 
-        let label = todo!(); // self.ctx.get_id_label(branch_var);
+        let label = self.ctx.get_local_label(branch_var);
 
         let mut cases = Vec::new();
 

@@ -5,7 +5,8 @@ use std::{
 
 use base::{
     hash::{Map, Set, scoped::ScopedMap},
-    index::IndexVec,
+    index::{Idx, IndexVec},
+    pp::FormatIterator,
 };
 use span::{
     Ident, SourceId, Sp, Span, Sym,
@@ -170,6 +171,7 @@ struct LoweringContext<'hir> {
 
     // Stack of modules we are in.
     module_stack: Vec<ModuleId>,
+    local_module_stack: Vec<Ident>,
 
     // Local bindings introduced by patterns.
     locals: ScopedMap<Ident, HirId>,
@@ -186,12 +188,13 @@ impl<'hir> LoweringContext<'hir> {
         Self {
             arena,
             imports: Map::default(),
-            hir_id: HirId::ZERO,
+            hir_id: HirId::ZERO.plus(1),
             values: HirMap::default(),
             constructors: HirMap::default(),
             types: HirMap::default(),
             modules: IndexVec::default(),
             module_stack: Vec::new(),
+            local_module_stack: Vec::new(),
             locals: ScopedMap::default(),
             current_module_id: None,
             in_std_import: false,
@@ -257,6 +260,9 @@ impl<'hir> LoweringContext<'hir> {
             // finding the closest binding.
             for &module_id in self.module_stack.iter().rev() {
                 let module = self.modules.get(module_id).unwrap();
+                if let ModuleKind::Unit(_) = module.kind {
+                    break;
+                }
                 if let Some(hir_id) = module.values.get(&id) {
                     return Ok(Res::Def(DefKind::Value, *hir_id));
                 }
@@ -266,8 +272,8 @@ impl<'hir> LoweringContext<'hir> {
         // Descend into the innermost module in the path prefix.
         let mut curr = self.current_module();
         for segment in path.segments().take(path.access.len()) {
-            log::trace!("{segment}");
-            log::trace!("{:?}", curr);
+            //log::trace!("{segment}");
+            //log::trace!("{:?}", curr);
             curr = curr
                 .modules
                 .get(&segment)
@@ -290,6 +296,23 @@ impl<'hir> LoweringContext<'hir> {
         log::trace!("{:?}", curr);
 
         Err(LowerError::Resolve(path.to_string(), path.span()))
+    }
+
+    fn current_value_path(&mut self, id: Ident) -> hir::Path<'hir> {
+        let hir_id = self.next_hir_id();
+        if let Some((&root, access)) = self.local_module_stack.split_first() {
+            log::trace!("{}.{}.{id} -> {hir_id}", root, access.iter().format("."));
+            self.arena.path(
+                root,
+                access.into_iter().copied().chain(std::iter::once(id)),
+                id.span,
+                Res::Def(DefKind::Value, hir_id),
+            )
+        } else {
+            log::trace!("{id} -> {hir_id}");
+            self.arena
+                .path(id, [], id.span, Res::Def(DefKind::Value, hir_id))
+        }
     }
 
     fn std_import_item(
@@ -361,6 +384,7 @@ impl<'hir> LoweringContext<'hir> {
 
     fn lower_import(
         &mut self,
+        id: Ident,
         import_path: &std::path::Path,
     ) -> Result<(ModuleId, SourceId), LowerError> {
         let mut file_path = std::path::PathBuf::new();
@@ -383,7 +407,9 @@ impl<'hir> LoweringContext<'hir> {
                 let ast_arena = syntax::Arena::default();
                 let comp_unit = syntax::parse_comp_unit_in(&ast_arena, &file_path)
                     .map_err(LowerError::Parse)?;
+                self.local_module_stack.push(id);
                 let (module_id, comp_unit) = self.lower_comp_unit(comp_unit)?;
+                self.local_module_stack.pop();
                 self.imports
                     .insert(comp_unit.source_id, (module_id, comp_unit));
                 (module_id, comp_unit.source_id)
@@ -419,7 +445,8 @@ impl<'hir> LoweringContext<'hir> {
             }
             ast::Item::Val(id, typ, e) => {
                 seen.update(Namespace::Value, id)?;
-                let hir_id = self.next_hir_id();
+                let path = self.current_value_path(id);
+                let hir_id = path.res().hir_id();
 
                 // Insert hir_id into scope before lowering value
                 // to allow recursive functions.
@@ -465,6 +492,7 @@ impl<'hir> LoweringContext<'hir> {
                 }
 
                 let value = Value {
+                    path,
                     hir_id,
                     recursive: recursive_visitor.recursive_function,
                     expr,
@@ -478,9 +506,11 @@ impl<'hir> LoweringContext<'hir> {
             }
             ast::Item::External(id, typ, s) => {
                 seen.update(Namespace::Value, id)?;
-                let hir_id = self.next_hir_id();
+                let path = self.current_value_path(id);
+                let hir_id = path.res().hir_id();
                 let typ = self.lower_type(typ)?;
                 let value = Value {
+                    path,
                     hir_id,
                     recursive: false,
                     expr: self.arena.expr(hir::ExprKind::External(s.sym, typ), s.span),
@@ -497,12 +527,14 @@ impl<'hir> LoweringContext<'hir> {
                     ast::ModExpr::Struct(items) => {
                         let module_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
                         self.current_module_mut().modules.insert(id, module_id);
+                        self.local_module_stack.push(id);
                         let items =
                             self.with_module(module_id, |self_| self_.lower_items(false, items))?;
+                        self.local_module_stack.pop();
                         hir::ModExprKind::Struct(items)
                     }
                     ast::ModExpr::Import(path) => {
-                        let (module_id, source_id) = self.lower_import(path)?;
+                        let (module_id, source_id) = self.lower_import(id, path)?;
                         self.current_module_mut().modules.insert(id, module_id);
                         hir::ModExprKind::Import(source_id)
                     }
@@ -726,6 +758,7 @@ impl<'hir> LoweringContext<'hir> {
 
     fn lower_expr_path<'ast>(&self, path: ast::Path<'ast>) -> Result<hir::Path<'hir>, LowerError> {
         let res = self.resolve_path(Namespace::Value, path)?;
+        log::trace!("resolve {path} -> {res}");
         Ok(self
             .arena
             .path(path.root, path.access.iter().copied(), path.span(), res))

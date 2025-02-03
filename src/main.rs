@@ -15,11 +15,7 @@ fn main() {
     };
 
     let program_path = PathBuf::from(&args[1]);
-    if driver::run(
-        Source::File(program_path),
-        Mode::Real(log_level),
-        Pass::Infer,
-    ) {
+    if driver::run(Source::File(program_path), Mode::Real(log_level), Pass::Mir) {
         std::process::exit(1);
     }
 }

@@ -54,7 +54,8 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
         return Ok(());
     }
 
-    mir::lower(&hir_arena, infer_data, hir);
+    let mir = mir::lower(&hir_arena, infer_data, hir);
+    log::trace!("{mir}");
 
     Ok(())
 }
