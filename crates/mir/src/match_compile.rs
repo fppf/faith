@@ -4,12 +4,88 @@ use span::Ident;
 
 use crate::{lower::LoweringContext, mir::Label};
 
-// References
-// ----------
+// The pattern match compilation algorithm is due to Jules Jacobs
+// https://julesjacobs.com/notes/patternmatching/patternmatching.pdf
+// with help from Yorick Peterse's implementation
+// https://github.com/yorickpeterse/pattern-matching-in-rust
+//
+// The algorithm
+// -------------
+// The following is a rough distillation of Jacobs' notes.
+//
+// The first step is to recast the expression form
+//
+//   case a {
+//      p1 => e1,
+//      p2 => e2,
+//      ...
+//      pn => en,
+//   }
+//
+// which does implicit tests against a into the internal form
+//
+//   case {
+//      a is p1 => e1,
+//      a is p2 => e2,
+//      ...
+//      a in pn => en,
+//   }
+//
+// where we perform explicit tests (a is pattern). A list of
+// such tests is called a _clause_: (a1 is p1), ..., (ak is pk).
+// All tests are against variables, since we can hoist complicated
+// expressions beforehand.
+//
+// A case expression gives us a list of 1-test clauses (since the user
+// can only write cases against a single scrutinee). The internal
+// pattern matchin will use many-test clauses depending on the arity
+// of constructors.
+//
+// The goal is an algorithm that takes such an input list of clauses
+// and outputs a decision tree of _primitive_ cases that test against
+// a single constructor:
+//
+//   case# a {
+//      C a1 ... ak => [A],
+//      _           => [B],
+//   }
+//
+// Steps
+// -----
+// Given a list of clauses, perform the following.
+//
+//   1. Push tests against bare variables (a is x) into the RHS of
+//      case arms using let x = a in RHS, so that all remaining tests
+//      are against constructors.
+//   2. Select one test (a is C p1 ... pk) in the first clause using a
+//      heuristic which will minimize code duplication. A simple heuristic
+//      is to choose a test that is present in the most amount of other
+//      clauses.
+//   3. Generate the primitive case
+//         case# a {
+//            C a1 ... ak => [A],
+//            _           => [B],
+//         }
+//   4. Create subproblems [A] and [B] by iterating over each clause.
+//      If the clause contains
+//      (a) a test (a is C p1' ... pk'), then expand to the clause
+//          (a1 is p1'), ..., (ak is pk') and add to [A], ensuring the
+//          names a1, ..., ak are used consistently.
+//      (b) a test (a is D p1' ... pk') and D != C, then add to [B]
+//          unchanged.
+//      (c) no test for a, then add to both [A] and [B]. Note that each
+//          clause can have only one test for a.
+//   5. Recursively generate code for [A] and [B] using steps 1-4.
+//      The base cases are:
+//      (a) Empty clause list: all patterns failed, so we have an
+//          nonexhaustive case.
+//      (b) Empty first clause / zero tests: the first clause successfully
+//          matched, so just return the corresponding case arm action / RHS.
+//
+// Other references
+// ----------------
 // Compiling Pattern Matching to Good Decision Trees, Luc Maranget
 // https://compiler.club/compiling-pattern-matching/
-// https://julesjacobs.com/notes/patternmatching/patternmatching.pdf
-// https://github.com/yorickpeterse/pattern-matching-in-rust
 // https://github.com/SomewhatML/match-compile/
 
 #[derive(Clone, Debug)]
@@ -35,7 +111,25 @@ pub enum Constructor {
 
 #[derive(Default)]
 struct Matrix<'hir> {
-    rows: Vec<Row<'hir>>,
+    clauses: Vec<Clause<'hir>>,
+}
+
+// A list of tests and the corresponding action.
+struct Clause<'hir> {
+    tests: Vec<Test<'hir>>,
+    body: Body,
+}
+
+// Test a variable against a pattern (id is pat).
+struct Test<'hir> {
+    id: Ident,
+    pat: &'hir Pat<'hir>,
+}
+
+impl<'hir> Test<'hir> {
+    fn new(id: Ident, pat: &'hir Pat<'hir>) -> Self {
+        Test { id, pat }
+    }
 }
 
 struct Body {
@@ -52,53 +146,38 @@ impl Body {
     }
 }
 
-struct Row<'hir> {
-    entries: Vec<Entry<'hir>>,
-    body: Body,
-}
-
-struct Entry<'hir> {
-    id: Ident,
-    pat: &'hir Pat<'hir>,
-}
-
-impl<'hir> Entry<'hir> {
-    fn new(id: Ident, pat: &'hir Pat<'hir>) -> Self {
-        Entry { id, pat }
-    }
-}
-
 impl<'hir> Matrix<'hir> {
     fn new_from_case(scrutinee_id: Ident, arms: &'hir [CaseArm<'hir>]) -> Self {
-        let rows: Vec<_> = arms
-            .iter()
-            .enumerate()
-            .map(|(action, (pat, _))| Row {
-                entries: vec![Entry::new(scrutinee_id, pat)],
-                body: Body::new(action),
-            })
-            .collect();
-        Matrix { rows }
+        Self {
+            clauses: arms
+                .iter()
+                .enumerate()
+                .map(|(action, (pat, _))| Clause {
+                    tests: vec![Test::new(scrutinee_id, pat)],
+                    body: Body::new(action),
+                })
+                .collect(),
+        }
     }
 
-    fn branch_var(&self) -> Option<Ident> {
+    fn branch_variable(&self) -> Option<Ident> {
         let mut counts = Map::default();
-        for row in &self.rows {
-            for entry in &row.entries {
-                *counts.entry(&entry.id).or_insert(0) += 1;
+        for clause in &self.clauses {
+            for test in &clause.tests {
+                *counts.entry(&test.id).or_insert(0) += 1;
             }
         }
-        self.rows
+        self.clauses
             .first()?
-            .entries
+            .tests
             .iter()
-            .map(|e| e.id)
+            .map(|test| test.id)
             .max_by_key(|id| counts[id])
     }
 
     fn bind_variable_patterns(&mut self) {
-        for row in self.rows.iter_mut() {
-            row.entries.retain(|e| {
+        for row in self.clauses.iter_mut() {
+            row.tests.retain(|e| {
                 if let PatKind::Var(id, _) = e.pat.kind {
                     row.body.bindings.push((id, e.id));
                     false
@@ -117,18 +196,20 @@ struct Compiler<'a, 'hir> {
 impl<'hir> Compiler<'_, 'hir> {
     fn compile(&mut self, matrix: &mut Matrix<'hir>) -> DecisionTree {
         // If the matrix has no rows, then we vacuously fail.
-        if matrix.rows.is_empty() {
+        if matrix.clauses.is_empty() {
             return DecisionTree::Fail;
         }
 
         matrix.bind_variable_patterns();
 
-        if matrix.rows[0].entries.is_empty() {
-            let row = matrix.rows.remove(0);
+        if matrix.clauses[0].tests.is_empty() {
+            let row = matrix.clauses.remove(0);
             return DecisionTree::Leaf(row.body.action);
         }
 
-        let branch_var = matrix.branch_var().expect("Could not get branching var");
+        let branch_var = matrix
+            .branch_variable()
+            .expect("Could not get branching var");
 
         let label = self.ctx.get_local_label(branch_var);
 
@@ -147,7 +228,7 @@ impl<'hir> Compiler<'_, 'hir> {
 
         let mut matrix = Matrix::default();
 
-        for row in &matrix.rows {}
+        for row in &matrix.clauses {}
 
         matrix
     }
