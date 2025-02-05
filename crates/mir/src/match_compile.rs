@@ -189,51 +189,6 @@ impl<'hir> Matrix<'hir> {
     }
 }
 
-struct Compiler<'a, 'hir> {
-    ctx: &'a LoweringContext<'hir>,
-}
-
-impl<'hir> Compiler<'_, 'hir> {
-    fn compile(&mut self, matrix: &mut Matrix<'hir>) -> DecisionTree {
-        // If the matrix has no rows, then we vacuously fail.
-        if matrix.clauses.is_empty() {
-            return DecisionTree::Fail;
-        }
-
-        matrix.bind_variable_patterns();
-
-        if matrix.clauses[0].tests.is_empty() {
-            let row = matrix.clauses.remove(0);
-            return DecisionTree::Leaf(row.body.action);
-        }
-
-        let branch_var = matrix
-            .branch_variable()
-            .expect("Could not get branching var");
-
-        let label = self.ctx.get_local_label(branch_var);
-
-        let mut cases = Vec::new();
-
-        DecisionTree::Switch(label, cases, None)
-    }
-
-    fn specialize(&self, id: Ident, matrix: &Matrix<'hir>) -> Matrix<'hir> {
-        let (arity, typ) = self
-            .ctx
-            .infer_data
-            .ctor_to_adt
-            .get(&id)
-            .expect("Variant constructor not found");
-
-        let mut matrix = Matrix::default();
-
-        for row in &matrix.clauses {}
-
-        matrix
-    }
-}
-
 impl<'hir> LoweringContext<'hir> {
     pub fn match_compile(
         &mut self,
@@ -242,8 +197,54 @@ impl<'hir> LoweringContext<'hir> {
     ) -> (Label, DecisionTree) {
         let (label, scrutinee_id, arms) = self.preprocess_case(scrutinee, arms);
         let mut matrix = Matrix::new_from_case(scrutinee_id, arms);
-        let mut compiler = Compiler { ctx: self };
-        let tree = compiler.compile(&mut matrix);
+        let tree = self.compile(&mut matrix);
         (label, tree)
+    }
+
+    fn compile(&mut self, matrix: &mut Matrix<'hir>) -> DecisionTree {
+        // If the matrix has no rows, then we vacuously fail.
+        if matrix.clauses.is_empty() {
+            return DecisionTree::Fail;
+        }
+
+        matrix.bind_variable_patterns();
+
+        // If the first clause has no tests, then we have a successful match.
+        if matrix.clauses[0].tests.is_empty() {
+            let row = matrix.clauses.remove(0);
+            return DecisionTree::Leaf(row.body.action);
+        }
+
+        let branch_var = matrix
+            .branch_variable()
+            .expect("could not get branching var");
+
+        let label = self.get_local_label(branch_var);
+
+        let branch_var_typ = self.get_label_type(label);
+        /*self
+        .infer_data
+        .hir_id_to_type
+        .get(&self.get_local_hir_id(branch_var))
+        .unwrap_or_else(|| panic!("no type for {branch_var}"));
+        */
+
+        let mut cases = Vec::new();
+
+        DecisionTree::Switch(label, cases, None)
+    }
+
+    fn specialize(&self, id: Ident, matrix: &Matrix<'hir>) -> Matrix<'hir> {
+        let (arity, typ) = self
+            .infer_data
+            .ctor_to_adt
+            .get(&id)
+            .expect("variant constructor not found");
+
+        let mut matrix = Matrix::default();
+
+        for row in &matrix.clauses {}
+
+        matrix
     }
 }

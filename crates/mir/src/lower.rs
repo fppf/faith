@@ -1,7 +1,9 @@
+use core::panic;
+
 use base::{hash::Map, index::Idx};
 use hir::{
     Arena, CaseArm, CompUnit, Expr, ExprArg, ExprKind, HirId, Lambda, ModExpr, ModExprKind, Pat,
-    PatKind, Path, Program,
+    PatKind, Path, Program, Ty,
 };
 use infer::InferData;
 use span::{Ident, Span, Sym};
@@ -19,9 +21,12 @@ pub fn lower<'hir>(
     LoweringContext::new(arena, program, infer_data).lower()
 }
 
+// TODO. clean up profanity of maps.
 pub(crate) struct LoweringContext<'hir> {
     module: mir::Module,
     hir_id_to_label: Map<HirId, Label>,
+    label_to_hir_id: Map<Label, HirId>,
+    label_to_type: Map<Label, Ty<'hir>>,
     local_to_label: Map<Ident, Label>,
     label: Label,
     program: &'hir Program<'hir>,
@@ -39,6 +44,8 @@ impl<'hir> LoweringContext<'hir> {
         Self {
             module: Module::default(),
             hir_id_to_label: Map::default(),
+            label_to_hir_id: Map::default(),
+            label_to_type: Map::default(),
             local_to_label: Map::default(),
             label: MAIN_LABEL.plus(1),
             program,
@@ -60,7 +67,7 @@ impl<'hir> LoweringContext<'hir> {
         label
     }
 
-    fn insert_temp(&mut self) -> (Path<'hir>, Label) {
+    fn insert_temp(&mut self, typ: Ty<'hir>) -> (Path<'hir>, Label) {
         let label = self.next_label();
         let id = Ident::new(
             Sym::intern(&format!("~tmp{}", label.index())),
@@ -68,6 +75,8 @@ impl<'hir> LoweringContext<'hir> {
         );
         let hir_id = self.next_hir_id();
         self.hir_id_to_label.insert(hir_id, label);
+        self.label_to_hir_id.insert(label, hir_id);
+        self.label_to_type.insert(label, typ);
         self.local_to_label.insert(id, label);
         let path = self
             .hir_arena
@@ -75,9 +84,16 @@ impl<'hir> LoweringContext<'hir> {
         (path, label)
     }
 
-    fn insert_hir_id(&mut self, hid_id: HirId) -> Label {
+    fn insert_hir_id(&mut self, hir_id: HirId) -> Label {
         let label = self.next_label();
-        self.hir_id_to_label.insert(hid_id, label);
+        self.hir_id_to_label.insert(hir_id, label);
+        self.label_to_hir_id.insert(label, hir_id);
+        let typ = self
+            .infer_data
+            .hir_id_to_type
+            .get(&hir_id)
+            .unwrap_or_else(|| panic!("no type for {hir_id}"));
+        self.label_to_type.insert(label, *typ);
         label
     }
 
@@ -98,6 +114,17 @@ impl<'hir> LoweringContext<'hir> {
 
     pub fn get_local_label(&self, ident: Ident) -> Label {
         self.local_to_label.get(&ident).copied().unwrap()
+    }
+
+    pub fn get_local_hir_id(&self, ident: Ident) -> HirId {
+        self.label_to_hir_id
+            .get(&self.get_local_label(ident))
+            .copied()
+            .unwrap()
+    }
+
+    pub fn get_label_type(&self, label: Label) -> Ty<'hir> {
+        self.label_to_type.get(&label).copied().unwrap()
     }
 
     fn push_item(&mut self, label: Label, body: mir::Expr) {
@@ -166,7 +193,7 @@ impl<'hir> LoweringContext<'hir> {
                 let expr = match expr.kind() {
                     ExprKind::Path(_) | ExprKind::Lit(_) => expr,
                     _ => {
-                        let (path, label) = self.insert_temp();
+                        let (path, label) = self.insert_temp(todo!());
                         split.push((label, self.lower_expr(expr)));
                         self.hir_arena.expr(ExprKind::Path(path), path.span())
                     }
@@ -235,7 +262,12 @@ impl<'hir> LoweringContext<'hir> {
             {
                 return (label, scrutinee, id);
             }
-            let (path, label) = ctx.insert_temp();
+            let typ = ctx
+                .infer_data
+                .expr_types
+                .get(&scrutinee)
+                .unwrap_or_else(|| panic!("no type for {scrutinee}"));
+            let (path, label) = ctx.insert_temp(*typ);
             let hoisted_scrutinee = ctx.hir_arena.expr(ExprKind::Path(path), path.span());
             (label, hoisted_scrutinee, path.id())
         }
@@ -354,7 +386,7 @@ impl<'hir> LoweringContext<'hir> {
                 }
                 PatKind::Lit(_) => unreachable!("literal in lambda pattern"),
                 _ => {
-                    let (path, label) = self.insert_temp();
+                    let (path, label) = self.insert_temp(todo!());
                     let expr = self.hir_arena.expr(ExprKind::Path(path), Span::dummy());
                     binds.push((arg, expr));
                     label

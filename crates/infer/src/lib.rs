@@ -27,6 +27,7 @@ pub fn infer_program_in<'hir>(
 
 #[derive(Default)]
 pub struct InferData<'hir> {
+    pub hir_id_to_type: HirMap<Ty<'hir>>,
     pub expr_types: Map<Expr<'hir>, Ty<'hir>>,
     pub adts: Map<Ident, Ty<'hir>>,
     pub ctor_to_adt: Map<Ident, (usize /* arity */, Ty<'hir> /* variant type */)>,
@@ -96,6 +97,7 @@ impl<'hir> TypeChecker<'hir> {
         for (_, t) in self.infer_data.expr_types.iter_mut() {
             *t = self.subs.apply(*t);
         }
+        self.infer_data.hir_id_to_type = self.env;
         Ok(self.infer_data)
     }
 
