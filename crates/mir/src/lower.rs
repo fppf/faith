@@ -143,9 +143,13 @@ impl<'hir> LoweringContext<'hir> {
         }
     }
 
+    // Recursively construct a sequence of lowered binds representing the original
+    // HIR bind `pat = expr`. Since we completely eliminate compound patterns, a
+    // single HIR bind can produce multiple MIR binds.
     fn lower_bind(&mut self, pat: &'hir Pat<'hir>, expr: Expr<'hir>) -> Vec<(Label, mir::Expr)> {
         match pat.kind {
             PatKind::Wild => {
+                // TODO. unused label.
                 vec![(self.next_label(), self.lower_expr(expr))]
             }
             PatKind::Var(id, hir_id) => {
@@ -164,7 +168,7 @@ impl<'hir> LoweringContext<'hir> {
                     _ => {
                         let (path, label) = self.insert_temp();
                         split.push((label, self.lower_expr(expr)));
-                        Expr::new(self.hir_arena, ExprKind::Path(path), Span::dummy())
+                        self.hir_arena.expr(ExprKind::Path(path), path.span())
                     }
                 };
 
@@ -177,12 +181,12 @@ impl<'hir> LoweringContext<'hir> {
                 }
                 split
             }
-            PatKind::Constructor(_, _) => {
+            PatKind::Constructor(..) => {
                 // We could allow this when the pattern is irrefutable,
                 // i.e., only one constructor for the ADT.
-                todo!()
+                todo!("implement irrefutable pattern destructuring")
             }
-            _ => todo!(),
+            PatKind::Or(_) => todo!("implement or patterns"),
         }
     }
 
@@ -241,8 +245,7 @@ impl<'hir> LoweringContext<'hir> {
         for (pat, body) in arms {
             let (pat, bind) = replace_variable_pattern(pat);
             if let Some(bind) = bind {
-                let body = Expr::new(
-                    self.hir_arena,
+                let body = self.hir_arena.expr(
                     ExprKind::Let(
                         self.hir_arena.alloc_from_iter([(bind, hoisted_scrutinee)]),
                         *body,
@@ -288,6 +291,9 @@ impl<'hir> LoweringContext<'hir> {
                 })
             }
             ExprKind::App(_u, e, args) => {
+                // Lower (f e1 ... en) to
+                // let l1 = lower(e1) in ... let ln = lower(en) in (f l1 ... ln).
+                // If lower(ei) is already a label or literal, don't add a superfluous bind.
                 let mut args: Vec<_> = args
                     .iter()
                     .flat_map(|arg| self.lower_expr_arg(arg))
@@ -312,11 +318,15 @@ impl<'hir> LoweringContext<'hir> {
                 let (label, tree) = self.match_compile(e, arms);
                 mir::Expr::Case(label, tree)
             }
-            ExprKind::Seq(e1, e2) => mir::Expr::Let(
-                self.next_label(),
-                Box::new(self.lower_expr(e1)),
-                Box::new(self.lower_expr(e2)),
-            ),
+            ExprKind::Seq(e1, e2) => {
+                // Lower e1; e2 to let _l = lower(e1) in lower(e2).
+                // TODO. unused label.
+                mir::Expr::Let(
+                    self.next_label(),
+                    Box::new(self.lower_expr(e1)),
+                    Box::new(self.lower_expr(e2)),
+                )
+            }
         }
     }
 
@@ -352,8 +362,7 @@ impl<'hir> LoweringContext<'hir> {
             };
             args.push(label);
         }
-        let body = Expr::new(
-            self.hir_arena,
+        let body = self.hir_arena.expr(
             ExprKind::Let(&*self.hir_arena.alloc_from_iter(binds), lambda.body),
             lambda.body.span(),
         );
