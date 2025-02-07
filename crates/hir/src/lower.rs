@@ -1,10 +1,13 @@
 use std::{
+    borrow::Borrow,
+    collections::hash_map::Entry,
     fmt,
+    hash::Hash,
     ops::{Index, IndexMut},
 };
 
 use base::{
-    hash::{Map, Set, scoped::ScopedMap},
+    hash::{Map, Set},
     index::{Idx, IndexVec},
     pp::FormatIterator,
 };
@@ -15,15 +18,16 @@ use span::{
 use syntax::ast;
 
 use crate::{
-    Arena, Constructor, DefKind, HirId, HirMap, Res, TypeDecl, Value, Visitor,
+    Arena, Constructor, DefKind, HirCtxt, HirId, HirMap, Res, TypeDecl, UniVar, UniVarId, Value,
+    Visitor,
     hir::{self, Ty},
 };
 
-pub fn lower_program_in<'ast, 'hir>(
-    hir_arena: &'hir Arena<'hir>,
+pub(crate) fn lower_program_in<'ast, 'hir>(
+    hir_ctxt: &'hir HirCtxt<'hir>,
     program: &'ast ast::Program<'ast>,
 ) -> Result<&'hir hir::Program<'hir>, Diagnostic> {
-    LoweringContext::new(hir_arena)
+    LoweringContext::new(hir_ctxt)
         .lower_program(program)
         .map_err(Diagnostic::from)
 }
@@ -154,10 +158,56 @@ impl<T> IndexMut<Namespace> for PerNs<T> {
     }
 }
 
-struct LoweringContext<'hir> {
-    arena: &'hir Arena<'hir>,
+// A map with scoped values. Taken from `gluon/base/src/scoped_map.rs`.
+struct ScopedMap<K, V> {
+    // Key to stack of values.
+    map: Map<K, Vec<V>>,
+    // None is used as a marker to delimit scopes.
+    scopes: Vec<Option<K>>,
+}
 
-    hir_id: HirId,
+impl<K, V> Default for ScopedMap<K, V> {
+    fn default() -> Self {
+        Self {
+            map: Map::default(),
+            scopes: Vec::new(),
+        }
+    }
+}
+
+impl<K: Eq + Hash + Clone, V> ScopedMap<K, V> {
+    fn enter_scope(&mut self) {
+        self.scopes.push(None);
+    }
+
+    fn exit_scope(&mut self) {
+        while let Some(Some(k)) = self.scopes.pop() {
+            self.map.get_mut(&k).map(|v| v.pop());
+        }
+    }
+
+    #[inline]
+    fn get<Q>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.map.get(k).and_then(|v| v.last())
+    }
+
+    #[inline]
+    fn insert(&mut self, k: K, v: V) {
+        match self.map.entry(k.clone()) {
+            Entry::Vacant(e) => e.insert(Vec::new()),
+            Entry::Occupied(e) => e.into_mut(),
+        }
+        .push(v);
+        self.scopes.push(Some(k));
+    }
+}
+
+struct LoweringContext<'hir> {
+    hir_ctxt: &'hir HirCtxt<'hir>,
 
     values: HirMap<Value<'hir>>,
     constructors: HirMap<Constructor<'hir>>,
@@ -174,7 +224,7 @@ struct LoweringContext<'hir> {
     local_module_stack: Vec<Ident>,
 
     // Local bindings introduced by patterns.
-    locals: ScopedMap<Ident, HirId>,
+    locals: ScopedMap<Ident, hir::Path<'hir>>,
 
     // Which module (comp unit or inline) we are processing.
     current_module_id: Option<ModuleId>,
@@ -184,11 +234,10 @@ struct LoweringContext<'hir> {
 }
 
 impl<'hir> LoweringContext<'hir> {
-    fn new(arena: &'hir Arena<'hir>) -> Self {
+    fn new(hir_ctxt: &'hir HirCtxt<'hir>) -> Self {
         Self {
-            arena,
+            hir_ctxt,
             imports: Map::default(),
-            hir_id: HirId::ZERO.plus(1),
             values: HirMap::default(),
             constructors: HirMap::default(),
             types: HirMap::default(),
@@ -199,12 +248,6 @@ impl<'hir> LoweringContext<'hir> {
             current_module_id: None,
             in_std_import: false,
         }
-    }
-
-    fn next_hir_id(&mut self) -> HirId {
-        let next = self.hir_id;
-        self.hir_id = self.hir_id + 1;
-        next
     }
 
     fn current_module_id(&self) -> ModuleId {
@@ -247,24 +290,45 @@ impl<'hir> LoweringContext<'hir> {
         ret
     }
 
-    fn resolve_path(&self, ns: Namespace, path: ast::Path<'_>) -> Result<Res, LowerError> {
+    fn resolve_path(
+        &self,
+        ns: Namespace,
+        path: ast::Path<'_>,
+    ) -> Result<hir::Path<'hir>, LowerError> {
         if let Some(id) = path.as_ident() {
             // Attempt to find a pattern binding first.
             if ns == Namespace::Value
-                && let Some(hir_id) = self.locals.get(&id)
+                && let Some(&path) = self.locals.get(&id)
             {
-                return Ok(Res::Local(*hir_id));
+                return Ok(path);
             }
 
             // Traverse the current module stack outwards,
             // finding the closest binding.
+            //
+            // This allows us to reference items defined in an
+            // enclosing (inline) module scope. For example,
+            //
+            //   mod m = {
+            //      val x = 0
+            //      mod n = {
+            //         val y = x
+            //      }
+            //   }
+            //
             for &module_id in self.module_stack.iter().rev() {
-                let module = self.modules.get(module_id).unwrap();
+                let module = &self.modules[module_id];
                 if let ModuleKind::Unit(_) = module.kind {
+                    // Don't cross pass compilation unit.
                     break;
                 }
                 if let Some(hir_id) = module.values.get(&id) {
-                    return Ok(Res::Def(DefKind::Value, *hir_id));
+                    return Ok(self.hir_ctxt.path(
+                        path.root,
+                        path.access.iter().copied(),
+                        path.span(),
+                        Res::Def(DefKind::Value, *hir_id),
+                    ));
                 }
             }
         }
@@ -272,8 +336,6 @@ impl<'hir> LoweringContext<'hir> {
         // Descend into the innermost module in the path prefix.
         let mut curr = self.current_module();
         for segment in path.segments().take(path.access.len()) {
-            //log::trace!("{segment}");
-            //log::trace!("{:?}", curr);
             curr = curr
                 .modules
                 .get(&segment)
@@ -284,25 +346,33 @@ impl<'hir> LoweringContext<'hir> {
         if ns == Namespace::Value
             && let Some(hir_id) = curr.values.get(&path.leaf())
         {
-            return Ok(Res::Def(DefKind::Value, *hir_id));
+            return Ok(self.hir_ctxt.path(
+                path.root,
+                path.access.iter().copied(),
+                path.span(),
+                Res::Def(DefKind::Value, *hir_id),
+            ));
         }
 
         if ns == Namespace::Type
             && let Some(hir_id) = curr.types.get(&path.leaf())
         {
-            return Ok(Res::Def(DefKind::Type, *hir_id));
+            return Ok(self.hir_ctxt.path(
+                path.root,
+                path.access.iter().copied(),
+                path.span(),
+                Res::Def(DefKind::Type, *hir_id),
+            ));
         }
-
-        log::trace!("{:?}", curr);
 
         Err(LowerError::Resolve(path.to_string(), path.span()))
     }
 
     fn current_value_path(&mut self, id: Ident) -> hir::Path<'hir> {
-        let hir_id = self.next_hir_id();
+        let hir_id = self.hir_ctxt.new_hir_node();
         if let Some((&root, access)) = self.local_module_stack.split_first() {
             log::trace!("{}.{}.{id} -> {hir_id}", root, access.iter().format("."));
-            self.arena.path(
+            self.hir_ctxt.path(
                 root,
                 access.into_iter().copied().chain(std::iter::once(id)),
                 id.span,
@@ -310,7 +380,7 @@ impl<'hir> LoweringContext<'hir> {
             )
         } else {
             log::trace!("{id} -> {hir_id}");
-            self.arena
+            self.hir_ctxt
                 .path(id, [], id.span, Res::Def(DefKind::Value, hir_id))
         }
     }
@@ -341,10 +411,13 @@ impl<'hir> LoweringContext<'hir> {
         let (unit, main) = self.with_module(module, move |self_| {
             let items = self_.lower_items(true, program.unit.items)?;
             let main = self_.lower_expr(program.main)?;
-            let unit = self_.arena.alloc(hir::CompUnit { source_id, items });
+            let unit = self_
+                .hir_ctxt
+                .arena
+                .alloc(hir::CompUnit { source_id, items });
             Ok((unit, main))
         })?;
-        Ok(self.arena.alloc(hir::Program {
+        Ok(self.hir_ctxt.arena.alloc(hir::Program {
             unit,
             main,
             imports: self
@@ -355,7 +428,6 @@ impl<'hir> LoweringContext<'hir> {
             values: self.values,
             constructors: self.constructors,
             types: self.types,
-            last_hir_id: self.hir_id,
         }))
     }
 
@@ -370,7 +442,9 @@ impl<'hir> LoweringContext<'hir> {
         })?;
         Ok((
             module_id,
-            self.arena.alloc(hir::CompUnit { source_id, items }),
+            self.hir_ctxt
+                .arena
+                .alloc(hir::CompUnit { source_id, items }),
         ))
     }
 
@@ -422,7 +496,7 @@ impl<'hir> LoweringContext<'hir> {
         for item in items {
             self.lower_item(item, &mut seen, &mut hir_items)?;
         }
-        Ok(self.arena.alloc(hir_items))
+        Ok(self.hir_ctxt.arena.alloc(hir_items))
     }
 
     fn lower_item<'ast>(
@@ -505,7 +579,9 @@ impl<'hir> LoweringContext<'hir> {
                     path,
                     hir_id,
                     recursive: false,
-                    expr: self.arena.expr(hir::ExprKind::External(s.sym, typ), s.span),
+                    expr: self
+                        .hir_ctxt
+                        .expr(hir::ExprKind::External(s.sym, typ), s.span),
                     typ: Some(typ),
                 };
                 self.current_module_mut().values.insert(id, hir_id);
@@ -531,7 +607,7 @@ impl<'hir> LoweringContext<'hir> {
                         hir::ModExprKind::Import(source_id)
                     }
                 };
-                let mexpr = self.arena.alloc(hir::ModExpr {
+                let mexpr = self.hir_ctxt.arena.alloc(hir::ModExpr {
                     kind,
                     span: mexpr.span(),
                 });
@@ -553,16 +629,25 @@ impl<'hir> LoweringContext<'hir> {
 
         let mut decls = Vec::with_capacity(group.len());
         for decl in group {
-            let hir_id = self.next_hir_id();
+            let hir_id = self.hir_ctxt.new_hir_node();
             self.current_module_mut().types.insert(decl.id, hir_id);
             let decl = self.lower_type_decl(decl, seen)?;
             self.types.insert(hir_id, decl);
             items.types.insert(hir_id);
             decls.push(decl);
+
+            // FIXME
+            self.hir_ctxt.set_type(
+                hir_id,
+                Ty::uni_var(
+                    self.hir_ctxt,
+                    UniVar::new(UniVarId::from_u32(u32::MAX), hir::Kind::new(0)),
+                ),
+            );
         }
 
         Ok(hir::TypeDeclGroup {
-            decls: self.arena.alloc_from_iter(decls),
+            decls: self.hir_ctxt.arena.alloc_from_iter(decls),
         })
     }
 
@@ -572,30 +657,40 @@ impl<'hir> LoweringContext<'hir> {
         seen: &mut Seen,
     ) -> Result<hir::TypeDecl<'hir>, LowerError> {
         let vars = self
+            .hir_ctxt
             .arena
             .alloc_from_iter(decl.vars.iter().map(|&id| hir::TypeVar::new(id)));
-        let hir_id = self.next_hir_id();
+        let hir_id = self.hir_ctxt.new_hir_node();
 
         let kind = match decl.kind {
-            ast::TypeDeclKind::Alias(t) => hir::TypeDeclKind::Alias(self.lower_type(t)?),
+            ast::TypeDeclKind::Alias(typ) => {
+                let typ = self.lower_type(typ)?;
+                self.hir_ctxt.set_type(hir_id, typ);
+                hir::TypeDeclKind::Alias(typ)
+            }
             ast::TypeDeclKind::Variant(variants) => {
                 let mut constructors = Set::default();
-                let path =
-                    self.arena
-                        .path(decl.id, [], decl.span, Res::Def(hir::DefKind::Type, hir_id));
-                let vars = vars.iter().map(|&v| Ty::type_var(self.arena, v));
+                let path = self.hir_ctxt.path(
+                    decl.id,
+                    [],
+                    decl.span,
+                    Res::Def(hir::DefKind::Type, hir_id),
+                );
+                let typ = Ty::app(
+                    self.hir_ctxt,
+                    path,
+                    vars.iter().map(|&v| Ty::type_var(self.hir_ctxt, v)),
+                    path.span(),
+                );
+                self.hir_ctxt.set_type(hir_id, typ);
                 for &(id, args) in variants {
                     let mut new_args = Vec::with_capacity(args.len());
                     for arg in args {
                         new_args.push(self.lower_type_unscoped(arg)?);
                     }
-                    let cons_typ = Ty::n_arrow(
-                        self.arena,
-                        new_args.iter().copied(),
-                        Ty::app(self.arena, path, vars.clone(), path.span()),
-                    );
+                    let cons_typ = Ty::n_arrow(self.hir_ctxt, new_args.iter().copied(), typ);
                     seen.update(Namespace::Value, id)?;
-                    let cons_hir_id = self.next_hir_id();
+                    let cons_hir_id = self.hir_ctxt.new_hir_node();
                     constructors.insert(cons_hir_id);
                     self.current_module_mut().values.insert(id, cons_hir_id);
                     self.constructors.insert(cons_hir_id, Constructor {
@@ -604,8 +699,9 @@ impl<'hir> LoweringContext<'hir> {
                         arity: new_args.len(),
                         decl: hir_id,
                     });
+                    self.hir_ctxt.set_type(cons_hir_id, cons_typ);
                 }
-                hir::TypeDeclKind::Variant(self.arena.alloc(constructors))
+                hir::TypeDeclKind::Variant(self.hir_ctxt.arena.alloc(constructors))
             }
         };
 
@@ -628,16 +724,16 @@ impl<'hir> LoweringContext<'hir> {
         use hir::{BaseType, TyKind, TypeVar};
         Ok(match &**typ {
             ast::Type::Base(ast::BaseType::Unit) => {
-                self.arena.typ(TyKind::Base(BaseType::Unit), typ.span())
+                self.hir_ctxt.typ(TyKind::Base(BaseType::Unit), typ.span())
             }
             ast::Type::Base(ast::BaseType::Bool) => {
-                self.arena.typ(TyKind::Base(BaseType::Bool), typ.span())
+                self.hir_ctxt.typ(TyKind::Base(BaseType::Bool), typ.span())
             }
             ast::Type::Base(ast::BaseType::Str) => {
-                self.arena.typ(TyKind::Base(BaseType::Str), typ.span())
+                self.hir_ctxt.typ(TyKind::Base(BaseType::Str), typ.span())
             }
             ast::Type::Base(ast::BaseType::Int32) => {
-                self.arena.typ(TyKind::Base(BaseType::Int32), typ.span())
+                self.hir_ctxt.typ(TyKind::Base(BaseType::Int32), typ.span())
             }
             ast::Type::Var(id) => {
                 /*
@@ -646,53 +742,49 @@ impl<'hir> LoweringContext<'hir> {
                     .find_ident(Namespace::Type, *a)
                     .unwrap_or_else(|_| self.renamer.fresh_ident(Namespace::Type, *a));
                     */
-                Ty::type_var(self.arena, TypeVar::new(*id))
+                Ty::type_var(self.hir_ctxt, TypeVar::new(*id))
             }
             ast::Type::Arrow(arg, ret) => {
                 let arg = self.lower_type_unscoped(arg)?;
                 let ret = self.lower_type_unscoped(ret)?;
-                Ty::arrow(self.arena, hir::NO_WEB, arg, ret)
+                Ty::arrow(self.hir_ctxt, hir::NO_WEB, arg, ret)
             }
             ast::Type::Tuple(ts) => {
                 let mut elems = Vec::with_capacity(ts.len());
                 for t in ts.iter() {
                     elems.push(self.lower_type_unscoped(t)?);
                 }
-                Ty::tuple(self.arena, elems, typ.span())
+                Ty::tuple(self.hir_ctxt, elems, typ.span())
             }
             ast::Type::Vector(t) => Ty::new(
-                self.arena,
+                self.hir_ctxt,
                 TyKind::Vector(self.lower_type_unscoped(t)?),
                 typ.span(),
             ),
             ast::Type::Row(_fields, _ext) => todo!("record types"),
-            ast::Type::Path(p) => Ty::app(self.arena, self.lower_type_path(*p)?, [], typ.span()),
+            ast::Type::Path(p) => Ty::app(
+                self.hir_ctxt,
+                self.resolve_path(Namespace::Value, *p)?,
+                [],
+                typ.span(),
+            ),
             ast::Type::App(head, ts) => {
-                let head = self.lower_type_path(*head)?;
+                let head = self.resolve_path(Namespace::Type, *head)?;
                 let mut args = Vec::with_capacity(ts.len());
                 for t in ts.iter() {
                     args.push(self.lower_type_unscoped(t)?);
                 }
-                Ty::app(self.arena, head, args, typ.span())
+                Ty::app(self.hir_ctxt, head, args, typ.span())
             }
         })
-    }
-
-    fn lower_type_path<'ast>(
-        &mut self,
-        path: ast::Path<'ast>,
-    ) -> Result<hir::Path<'hir>, LowerError> {
-        let res = self.resolve_path(Namespace::Type, path)?;
-        Ok(self
-            .arena
-            .path(path.root, path.access.iter().copied(), path.span(), res))
     }
 
     fn lower_pat<'ast>(
         &mut self,
         pat: &'ast Sp<ast::Pat<'ast>>,
     ) -> Result<&'hir hir::Pat<'hir>, LowerError> {
-        self.lower_pat_mut(pat).map(|p| &*self.arena.alloc(p))
+        self.lower_pat_mut(pat)
+            .map(|p| &*self.hir_ctxt.arena.alloc(p))
     }
 
     fn lower_pats<'ast>(
@@ -703,7 +795,7 @@ impl<'hir> LoweringContext<'hir> {
         for pat in pats {
             new_pats.push(self.lower_pat_mut(pat)?);
         }
-        Ok(self.arena.alloc_from_iter(new_pats))
+        Ok(self.hir_ctxt.arena.alloc_from_iter(new_pats))
     }
 
     fn lower_pat_mut<'ast>(
@@ -715,15 +807,17 @@ impl<'hir> LoweringContext<'hir> {
             ast::Pat::Wild => PatKind::Wild,
             ast::Pat::Lit(l) => PatKind::Lit(self.lower_lit(l, pat.span())?),
             ast::Pat::Var(id) => {
-                let hir_id = self.next_hir_id();
-                self.locals.insert(id, hir_id);
-                PatKind::Var(id, hir_id)
+                let hir_id = self.hir_ctxt.new_hir_node();
+                let path = self.hir_ctxt.path(id, [], id.span, Res::Local(hir_id));
+                self.locals.insert(id, path);
+                PatKind::Var(path)
             }
             ast::Pat::Ann(p, t) => PatKind::Ann(self.lower_pat(p)?, self.lower_type(t)?),
             ast::Pat::Tuple(ps) => PatKind::Tuple(self.lower_pats(ps)?),
-            ast::Pat::Constructor(cons, ps) => {
-                PatKind::Constructor(self.lower_expr_path(cons)?, self.lower_pats(ps)?)
-            }
+            ast::Pat::Constructor(cons, ps) => PatKind::Constructor(
+                self.resolve_path(Namespace::Value, cons)?,
+                self.lower_pats(ps)?,
+            ),
             ast::Pat::Or(ps) => PatKind::Or(self.lower_pats(ps)?),
         };
         Ok(hir::Pat {
@@ -748,14 +842,6 @@ impl<'hir> LoweringContext<'hir> {
         })
     }
 
-    fn lower_expr_path<'ast>(&self, path: ast::Path<'ast>) -> Result<hir::Path<'hir>, LowerError> {
-        let res = self.resolve_path(Namespace::Value, path)?;
-        log::trace!("resolve {path} -> {res}");
-        Ok(self
-            .arena
-            .path(path.root, path.access.iter().copied(), path.span(), res))
-    }
-
     fn lower_expr<'ast>(
         &mut self,
         expr: &'ast Sp<ast::Expr<'ast>>,
@@ -763,8 +849,10 @@ impl<'hir> LoweringContext<'hir> {
         use hir::ExprKind;
         let kind = match **expr {
             ast::Expr::Lit(l) => ExprKind::Lit(self.lower_lit(l, expr.span())?),
-            ast::Expr::Path(p) => ExprKind::Path(self.lower_expr_path(p)?),
-            ast::Expr::Constructor(p) => ExprKind::Constructor(self.lower_expr_path(p)?),
+            ast::Expr::Path(p) => ExprKind::Path(self.resolve_path(Namespace::Value, p)?),
+            ast::Expr::Constructor(p) => {
+                ExprKind::Constructor(self.resolve_path(Namespace::Value, p)?)
+            }
             ast::Expr::Lambda(l) => ExprKind::Lambda(self.lower_lambda(l)?),
             ast::Expr::Let(binds, body) => {
                 let mut new_binds = Vec::with_capacity(binds.len());
@@ -777,7 +865,7 @@ impl<'hir> LoweringContext<'hir> {
                     }
                     self_.lower_expr(body)
                 })?;
-                ExprKind::Let(self.arena.alloc_from_iter(new_binds), body)
+                ExprKind::Let(self.hir_ctxt.arena.alloc_from_iter(new_binds), body)
             }
             ast::Expr::Case(e, arms) => {
                 let e = self.lower_expr(e)?;
@@ -790,7 +878,7 @@ impl<'hir> LoweringContext<'hir> {
                         Ok((p, e))
                     })?);
                 }
-                ExprKind::Case(e, self.arena.alloc_from_iter(new_arms))
+                ExprKind::Case(e, self.hir_ctxt.arena.alloc_from_iter(new_arms))
             }
             ast::Expr::If(cond, e1, e2) => {
                 let cond = self.lower_expr(cond)?;
@@ -805,21 +893,21 @@ impl<'hir> LoweringContext<'hir> {
                 for e in es.iter() {
                     args.push(self.lower_expr_arg(e)?);
                 }
-                ExprKind::App(hir::NO_WEB, head, self.arena.alloc_from_iter(args))
+                ExprKind::App(hir::NO_WEB, head, self.hir_ctxt.arena.alloc_from_iter(args))
             }
             ast::Expr::Tuple(es) => {
                 let mut elems = Vec::with_capacity(es.len());
                 for e in es.iter() {
                     elems.push(self.lower_expr(e)?);
                 }
-                ExprKind::Tuple(self.arena.alloc_from_iter(elems))
+                ExprKind::Tuple(self.hir_ctxt.arena.alloc_from_iter(elems))
             }
             ast::Expr::Vector(es) => {
                 let mut elems = Vec::with_capacity(es.len());
                 for e in es.iter() {
                     elems.push(self.lower_expr(e)?);
                 }
-                ExprKind::Vector(self.arena.alloc_from_iter(elems))
+                ExprKind::Vector(self.hir_ctxt.arena.alloc_from_iter(elems))
             }
             ast::Expr::Seq(e1, e2) => {
                 let e1 = self.lower_expr(e1)?;
@@ -827,7 +915,7 @@ impl<'hir> LoweringContext<'hir> {
                 ExprKind::Seq(e1, e2)
             }
         };
-        Ok(self.arena.expr(kind, expr.span))
+        Ok(self.hir_ctxt.expr(kind, expr.span))
     }
 
     fn lower_expr_arg<'ast>(

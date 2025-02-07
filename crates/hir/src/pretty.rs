@@ -120,7 +120,7 @@ impl HirPrinter {
         match pat.kind {
             PatKind::Wild => self.word("_"),
             PatKind::Lit(l) => self.print_lit(l),
-            PatKind::Var(x, _) => self.print_ident(x),
+            PatKind::Var(p) => self.print_path(p),
             PatKind::Ann(p, t) => {
                 self.popen();
                 self.print_pat(p);

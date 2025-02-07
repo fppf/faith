@@ -9,12 +9,9 @@ use base::{
     index::{Idx, IndexVec},
     pp::FormatIterator,
 };
-use hir::{Folder, Substitutable, Visitor};
+use hir::{Folder, HirCtxt, Substitutable, Visitor};
 
-use crate::{
-    Arena,
-    unify::{UnificationTable, UnifyKey, UnifyValue},
-};
+use crate::unify::{UnificationTable, UnifyKey, UnifyValue};
 
 base::newtype_index! {
     #[derive(PartialOrd, Ord)]
@@ -52,29 +49,28 @@ impl UnifyValue for Level {
     }
 }
 
-pub struct Substitution<'hir, T>
-where
-    T: Substitutable<'hir>,
-{
-    /// Stores the relationships of all variables in the substitution.
-    union: RefCell<UnificationTable<UnionByLevel>>,
-    /// Unification variables in the substitution, which can have a type
-    /// written to them at most once.
-    variables: RefCell<IndexVec<T::Var, T>>,
-    types: RefCell<Map<T::Var, OnceCell<T>>>,
-    pub arena: &'hir Arena<'hir>,
+pub struct Substitution<'hir, T: Substitutable<'hir>> {
+    inner: RefCell<SubstitutionInner<'hir, T>>,
+    pub ctxt: &'hir HirCtxt<'hir>,
 }
 
-impl<'hir, T> fmt::Display for Substitution<'hir, T>
-where
-    T: Substitutable<'hir>,
-{
+struct SubstitutionInner<'hir, T: Substitutable<'hir>> {
+    /// Stores the relationships of all variables in the substitution.
+    union: UnificationTable<UnionByLevel>,
+    /// Unification variables in the substitution, which can have a type
+    /// written to them at most once.
+    variables: IndexVec<T::Var, T>,
+    types: Map<T::Var, OnceCell<T>>,
+}
+
+impl<'hir, T: Substitutable<'hir>> fmt::Display for Substitution<'hir, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "[{}]",
-            self.variables
+            self.inner
                 .borrow()
+                .variables
                 .iter_enumerated()
                 .map(|(v, _)| {
                     self.find(v)
@@ -86,36 +82,35 @@ where
     }
 }
 
-impl<'hir, T> Substitution<'hir, T>
-where
-    T: Substitutable<'hir>,
-{
-    pub fn new(arena: &'hir Arena<'hir>) -> Self {
+impl<'hir, T: Substitutable<'hir>> Substitution<'hir, T> {
+    pub fn new(ctxt: &'hir HirCtxt<'hir>) -> Self {
         Self {
-            union: RefCell::default(),
-            variables: RefCell::default(),
-            types: RefCell::default(),
-            arena,
+            inner: RefCell::new(SubstitutionInner {
+                union: UnificationTable::default(),
+                variables: IndexVec::default(),
+                types: Map::default(),
+            }),
+            ctxt,
         }
     }
 
     pub fn new_var(&self) -> (T::Var, T) {
-        let len = self.variables.borrow().len();
-        let var = self
+        let mut inner = self.inner.borrow_mut();
+        let len = inner.variables.len();
+        let var = inner
             .variables
-            .borrow_mut()
-            .push(T::make_var(self.arena, T::Var::new(len)));
-        self.types.borrow_mut().insert(var, OnceCell::new());
-        let key = self.union.borrow_mut().new_key(Level::new(var.index()));
+            .push(T::make_var(self.ctxt, T::Var::new(len)));
+        inner.types.insert(var, OnceCell::new());
+        let key = inner.union.new_key(Level::new(var.index()));
         assert_eq!(var.index(), key.index());
-        (var, self.variables.borrow()[var])
+        (var, inner.variables[var])
     }
 
     pub fn insert(&self, var: T::Var, t: T) {
-        let mut union = self.union.borrow_mut();
-        let index = union.find(UnionByLevel::new(var.index())).index();
+        let mut inner = self.inner.borrow_mut();
+        let index = inner.union.find(UnionByLevel::new(var.index())).index();
         let var = T::Var::new(index);
-        match self.types.borrow().get(&var) {
+        match inner.types.get(&var) {
             Some(slot) => match slot.set(t) {
                 Ok(()) => (),
                 Err(_) => panic!("overwrote {} with {t}", slot.get().unwrap()),
@@ -124,31 +119,23 @@ where
         }
     }
 
-    #[allow(unused)]
-    pub fn unioned(&self, var_a: T::Var, var_b: T::Var) -> bool {
-        self.union.borrow_mut().unioned(
-            UnionByLevel::new(var_a.index()),
-            UnionByLevel::new(var_b.index()),
-        )
-    }
-
     pub fn find(&self, var: T::Var) -> Option<T> {
-        let mut union = self.union.borrow_mut();
-        if var.index() >= union.len() {
+        let mut inner = self.inner.borrow_mut();
+        if var.index() >= inner.union.len() {
             return None;
         }
         let var_lvl = UnionByLevel::new(var.index());
-        let index = union.find(var_lvl).index();
+        let index = inner.union.find(var_lvl).index();
         let repr_var = T::Var::new(index);
-        self.types
-            .borrow()
+        inner
+            .types
             .get(&repr_var)
             .and_then(|slot| slot.get().copied())
             .or_else(|| {
                 if index == var.index() {
                     None
                 } else {
-                    Some(self.variables.borrow()[repr_var])
+                    Some(inner.variables[repr_var])
                 }
             })
     }
@@ -162,8 +149,9 @@ where
         let var = var.as_var().expect("var is not a variable");
         if let Some(other) = t.as_var() {
             // If t is another var, union them by level.
-            self.union
+            self.inner
                 .borrow_mut()
+                .union
                 .unify_var_var(
                     UnionByLevel::new(var.index()),
                     UnionByLevel::new(other.index()),
@@ -181,19 +169,13 @@ where
     }
 
     fn apply_once(&self, t: T) -> T {
-        struct Applier<'a, 'hir, T>
-        where
-            T: Substitutable<'hir>,
-        {
+        struct Applier<'a, 'hir, T: Substitutable<'hir>> {
             subs: &'a Substitution<'hir, T>,
         }
 
-        impl<'hir, T> Folder<'hir, T> for Applier<'_, 'hir, T>
-        where
-            T: Substitutable<'hir>,
-        {
-            fn arena(&self) -> &'hir Arena<'hir> {
-                self.subs.arena
+        impl<'hir, T: Substitutable<'hir>> Folder<'hir, T> for Applier<'_, 'hir, T> {
+            fn ctxt(&self) -> &'hir HirCtxt<'hir> {
+                self.subs.ctxt
             }
 
             fn fold(&mut self, t: T) -> T {
@@ -221,19 +203,13 @@ where
     }
 
     pub fn occurs(&self, var: T::Var, t: T) -> bool {
-        struct Occurs<'a, 'hir, T>
-        where
-            T: Substitutable<'hir>,
-        {
+        struct Occurs<'a, 'hir, T: Substitutable<'hir>> {
             occurs: bool,
             var: T::Var,
             subs: &'a Substitution<'hir, T>,
         }
 
-        impl<'hir, T> Visitor<T> for Occurs<'_, 'hir, T>
-        where
-            T: Substitutable<'hir>,
-        {
+        impl<'hir, T: Substitutable<'hir>> Visitor<T> for Occurs<'_, 'hir, T> {
             fn visit(&mut self, mut t: T) {
                 if let Some(other) = t.as_var() {
                     if let Some(real) = self.subs.find(other) {
@@ -262,12 +238,14 @@ where
     }
 
     fn update_level(&self, var: T::Var, other: T::Var) {
-        let mut union = self.union.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         let other_level = UnionByLevel::new(other.index());
-        let level = union
+        let level = inner
+            .union
             .probe_value(UnionByLevel::new(var.index()))
-            .min(union.probe_value(other_level));
-        union
+            .min(inner.union.probe_value(other_level));
+        inner
+            .union
             .unify_var_value(other_level, level)
             .expect("ICE (update_level)");
     }

@@ -11,6 +11,7 @@ use span::{Ident, SourceId, Sp, Span, Sym};
 
 pub use crate::{Arena, path::*, typ::*};
 
+// TODO. hide creation methods?
 base::newtype_index! {
     pub struct HirId {}
 }
@@ -38,7 +39,6 @@ pub struct Program<'hir> {
     pub types: HirMap<TypeDecl<'hir>>,
     pub unit: &'hir CompUnit<'hir>,
     pub main: Expr<'hir>,
-    pub last_hir_id: HirId,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,7 +140,7 @@ pub struct Pat<'hir> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PatKind<'hir> {
     Wild,
-    Var(Ident, HirId),
+    Var(Path<'hir>),
     Lit(Lit),
     Ann(&'hir Pat<'hir>, Ty<'hir>),
     Tuple(&'hir [Pat<'hir>]),
@@ -156,20 +156,27 @@ impl<'hir> Pat<'hir> {
         let kind = match self.kind {
             PatKind::Wild | PatKind::Var(..) | PatKind::Lit(_) => return self,
             PatKind::Ann(p, t) => PatKind::Ann(f.fold(p), t),
-            PatKind::Tuple(ps) => {
-                PatKind::Tuple(f.arena().alloc_from_iter(ps.iter().map(|p| *f.fold(p))))
-            }
-            PatKind::Constructor(id, ps) => {
-                PatKind::Constructor(id, f.arena().alloc_from_iter(ps.iter().map(|p| *f.fold(p))))
-            }
-            PatKind::Or(ps) => {
-                PatKind::Or(f.arena().alloc_from_iter(ps.iter().map(|p| *f.fold(p))))
-            }
+            PatKind::Tuple(ps) => PatKind::Tuple(
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(ps.iter().map(|p| *f.fold(p))),
+            ),
+            PatKind::Constructor(id, ps) => PatKind::Constructor(
+                id,
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(ps.iter().map(|p| *f.fold(p))),
+            ),
+            PatKind::Or(ps) => PatKind::Or(
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(ps.iter().map(|p| *f.fold(p))),
+            ),
         };
         if self.kind == kind {
             self
         } else {
-            f.arena().alloc(Pat {
+            f.ctxt().arena.alloc(Pat {
                 kind,
                 span: self.span,
             })

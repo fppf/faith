@@ -8,5 +8,5 @@ log = { path = "../log" }
 base = { path = "../base" }
 span = { path = "../span" }
 hir = { path = "../hir" }
-mir = { path = "../mir" }
+#mir = { path = "../mir" }
 infer = { path = "../infer" }

@@ -17,26 +17,24 @@ use substitution::Substitution;
 use unify::{UnificationTable, UnifyKey};
 
 pub fn infer_program_in<'hir>(
-    arena: &'hir Arena<'hir>,
+    hir_ctxt: &'hir HirCtxt<'hir>,
     program: &'hir Program<'hir>,
 ) -> Result<InferData<'hir>, Diagnostic> {
-    TypeChecker::new(arena, program)
+    TypeChecker::new(hir_ctxt, program)
         .infer()
         .map_err(Diagnostic::from)
 }
 
 #[derive(Default)]
 pub struct InferData<'hir> {
-    pub hir_id_to_type: HirMap<Ty<'hir>>,
     pub expr_types: Map<Expr<'hir>, Ty<'hir>>,
     pub adts: Map<Ident, Ty<'hir>>,
     pub ctor_to_adt: Map<Ident, (usize /* arity */, Ty<'hir> /* variant type */)>,
 }
 
 struct TypeChecker<'hir> {
-    arena: &'hir Arena<'hir>,
+    hir_ctxt: &'hir HirCtxt<'hir>,
     program: &'hir Program<'hir>,
-    env: HirMap<Ty<'hir>>,
     type_var_src: TypeVarSource,
     skolem: SkolemId,
     constraints: Vec<Constraint<'hir, Ty<'hir>>>,
@@ -49,42 +47,33 @@ impl UnifyKey for WebId {
     type Value = ();
 }
 
+#[derive(Default)]
 struct TypeVarSource {
-    stamp: u32,
     char_count: u8,
 }
 
 impl TypeVarSource {
-    fn new(stamp: u32) -> Self {
-        Self {
-            stamp,
-            char_count: 0,
-        }
-    }
-
     fn reset(&mut self) {
         self.char_count = 0;
     }
 
-    fn fresh(&mut self) -> TypeVar {
+    fn fresh(&mut self, _hir_id: HirId) -> TypeVar {
         let ch = (b'a' + self.char_count) as char;
         self.char_count = (self.char_count + 1) % (b'z' - b'a');
         let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
-        self.stamp += 1;
         TypeVar::new(id)
     }
 }
 
 impl<'hir> TypeChecker<'hir> {
-    fn new(arena: &'hir Arena<'hir>, program: &'hir Program<'hir>) -> Self {
+    fn new(hir_ctxt: &'hir HirCtxt<'hir>, program: &'hir Program<'hir>) -> Self {
         Self {
-            arena,
+            hir_ctxt,
             program,
-            env: HirMap::default(),
-            type_var_src: TypeVarSource::new(1),
+            type_var_src: TypeVarSource::default(),
             skolem: SkolemId::ZERO,
             constraints: Vec::new(),
-            subs: Substitution::new(arena),
+            subs: Substitution::new(hir_ctxt),
             webs: UnificationTable::default(),
             infer_data: InferData::default(),
         }
@@ -97,12 +86,12 @@ impl<'hir> TypeChecker<'hir> {
         for (_, t) in self.infer_data.expr_types.iter_mut() {
             *t = self.subs.apply(*t);
         }
-        self.infer_data.hir_id_to_type = self.env;
+        assert!(self.hir_ctxt.is_ctxt_typed());
         Ok(self.infer_data)
     }
 
     fn type_from_lit(&self, lit: hir::Lit, span: Span) -> Ty<'hir> {
-        self.arena.typ(TyKind::Base(lit.base_type()), span)
+        self.hir_ctxt.typ(TyKind::Base(lit.base_type()), span)
     }
 
     fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
@@ -123,8 +112,10 @@ impl<'hir> TypeChecker<'hir> {
         let free_vars = typ.uni_vars();
         if !free_vars.is_empty() {
             for var in free_vars {
-                self.subs
-                    .insert(var.id, Ty::type_var(self.arena, self.type_var_src.fresh()));
+                self.subs.insert(
+                    var.id,
+                    Ty::type_var(self.hir_ctxt, self.type_var_src.fresh(HirId::ZERO)),
+                );
             }
             self.subs.apply(typ)
         } else {
@@ -134,13 +125,13 @@ impl<'hir> TypeChecker<'hir> {
 
     fn instantiate(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
         struct Instantiator<'a> {
-            arena: &'a Arena<'a>,
+            ctxt: &'a HirCtxt<'a>,
             subs: Map<Ident, Ty<'a>>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for Instantiator<'a> {
-            fn arena(&self) -> &'a Arena<'a> {
-                self.arena
+            fn ctxt(&self) -> &'a HirCtxt<'a> {
+                self.ctxt
             }
 
             fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
@@ -155,7 +146,7 @@ impl<'hir> TypeChecker<'hir> {
         }
 
         Instantiator {
-            arena: self.arena,
+            ctxt: self.hir_ctxt,
             subs: typ
                 .type_vars()
                 .iter()
@@ -174,17 +165,17 @@ impl<'hir> TypeChecker<'hir> {
     fn skolemize(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
         struct SkolemReplacer<'a> {
             skolems: Map<TypeVar, Skolem>,
-            arena: &'a Arena<'a>,
+            ctxt: &'a HirCtxt<'a>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for SkolemReplacer<'a> {
-            fn arena(&self) -> &'a Arena<'a> {
-                self.arena
+            fn ctxt(&self) -> &'a HirCtxt<'a> {
+                self.ctxt
             }
 
             fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
                 if let TyKind::Var(var) = typ.kind() {
-                    Ty::skolem(self.arena, self.skolems[var])
+                    Ty::skolem(self.ctxt, self.skolems[var])
                 } else {
                     typ.fold_with(self)
                 }
@@ -198,7 +189,7 @@ impl<'hir> TypeChecker<'hir> {
             .collect();
 
         let skolemized = SkolemReplacer {
-            arena: self.arena,
+            ctxt: self.hir_ctxt,
             skolems,
         }
         .fold(typ);
@@ -227,7 +218,7 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn infer_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) -> Result<(), InferError<'hir>> {
-        let mexpr = self.arena.alloc(ModExpr {
+        let mexpr = self.hir_ctxt.arena.alloc(ModExpr {
             kind: ModExprKind::Struct(unit.items),
             span: Span::dummy(),
         });
@@ -260,6 +251,7 @@ impl<'hir> TypeChecker<'hir> {
                         None => self.infer_solve_expr(value.expr)?,
                     };
                     log::trace!("{id} : {typ}");
+                    self.hir_ctxt.set_type(value.path.res().hir_id(), typ);
                 }
                 for (id, mexpr) in &items.modules {
                     log::trace!("mod {id}");
@@ -299,7 +291,7 @@ impl<'hir> TypeChecker<'hir> {
                     if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
                         match *arg {
                             ExprArg::Expr(e) => self.check_expr(e, arg_typ)?,
-                            ExprArg::Type(_t) => todo!("VTA"),
+                            ExprArg::Type(_) => todo!("VTA"),
                         }
                         typ = ret_typ;
                     } else {
@@ -328,22 +320,21 @@ impl<'hir> TypeChecker<'hir> {
                 for &elem in elems {
                     typs.push(self.infer_expr(elem)?);
                 }
-                Ty::tuple(self.arena, typs, expr.span())
+                Ty::tuple(self.hir_ctxt, typs, expr.span())
             }
             ExprKind::Vector(elems) => {
                 let base_typ = self.fresh_var();
-                if !elems.is_empty() {
-                    for &elem in elems {
-                        let elem_typ = self.infer_expr(elem)?;
-                        self.constrain(base_typ, elem_typ);
-                    }
+                for &elem in elems {
+                    let elem_typ = self.infer_expr(elem)?;
+                    self.constrain(base_typ, elem_typ);
                 }
-                self.arena.typ(TyKind::Vector(base_typ), expr.span())
+                self.hir_ctxt.typ(TyKind::Vector(base_typ), expr.span())
             }
             ExprKind::Seq(e1, e2) => {
                 self.check_expr(
                     e1,
-                    self.arena.typ(TyKind::Base(BaseType::Unit), Span::dummy()),
+                    self.hir_ctxt
+                        .typ(TyKind::Base(BaseType::Unit), Span::dummy()),
                 )?;
                 self.infer_expr(e2)?
             }
@@ -361,7 +352,8 @@ impl<'hir> TypeChecker<'hir> {
             ExprKind::If(cond, then_expr, else_expr) => {
                 self.check_expr(
                     cond,
-                    self.arena.typ(TyKind::Base(BaseType::Bool), Span::dummy()),
+                    self.hir_ctxt
+                        .typ(TyKind::Base(BaseType::Bool), Span::dummy()),
                 )?;
                 let then_typ = self.infer_expr(then_expr)?;
                 let else_typ = self.infer_expr(else_expr)?;
@@ -382,7 +374,7 @@ impl<'hir> TypeChecker<'hir> {
         if let Some((first, rest)) = args.split_first() {
             let arg_typ = self.infer_pat(first)?;
             let ret_typ = self.infer_lambda(rest, body)?;
-            Ok(Ty::arrow(self.arena, NO_WEB, arg_typ, ret_typ))
+            Ok(Ty::arrow(self.hir_ctxt, NO_WEB, arg_typ, ret_typ))
         } else {
             self.infer_expr(body)
         }
@@ -391,8 +383,8 @@ impl<'hir> TypeChecker<'hir> {
     /// Infer the type of a path by looking it up in the environment.
     fn infer_path(&mut self, path: Path<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         let hir_id = path.res().hir_id();
-        Ok(match self.env.get(&hir_id) {
-            Some(typ) => *typ,
+        Ok(match self.hir_ctxt.get_type(hir_id) {
+            Some(typ) => typ,
             None => {
                 let typ = if let Some(cons) = self.program.constructors.get(&hir_id) {
                     cons.typ
@@ -404,20 +396,18 @@ impl<'hir> TypeChecker<'hir> {
                         .unwrap_or_else(|| panic!("ICE: expected '{path}' to be lowered"));
 
                     if value.recursive {
-                        let fn_var = self.fresh_var();
-                        self.env.insert(hir_id, fn_var);
-                        return Ok(fn_var);
-                    }
-
-                    match value.typ {
-                        Some(typ) => {
-                            self.check_expr(value.expr, typ)?;
-                            typ
+                        self.fresh_var()
+                    } else {
+                        match value.typ {
+                            Some(typ) => {
+                                self.check_expr(value.expr, typ)?;
+                                typ
+                            }
+                            None => self.infer_expr(value.expr)?,
                         }
-                        None => self.infer_expr(value.expr)?,
                     }
                 };
-                self.env.insert(hir_id, typ);
+                self.hir_ctxt.set_type(hir_id, typ);
                 typ
             }
         })
@@ -427,9 +417,9 @@ impl<'hir> TypeChecker<'hir> {
     fn infer_pat(&mut self, pat: &'hir Pat<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         Ok(match pat.kind {
             PatKind::Wild => self.fresh_var(),
-            PatKind::Var(_, hir_id) => {
+            PatKind::Var(path) => {
                 let var = self.fresh_var();
-                self.env.insert(hir_id, var);
+                self.hir_ctxt.set_type(path.res().hir_id(), var);
                 var
             }
             PatKind::Lit(l) => self.type_from_lit(l, pat.span),
@@ -437,7 +427,7 @@ impl<'hir> TypeChecker<'hir> {
                 self.check_pat(pat, typ)?;
                 typ
             }
-            PatKind::Tuple(pats) => Ty::tuple(self.arena, self.infer_pats(pats)?, pat.span),
+            PatKind::Tuple(pats) => Ty::tuple(self.hir_ctxt, self.infer_pats(pats)?, pat.span),
             PatKind::Constructor(cons, args) => {
                 // TODO. well-formed check for cons_t
                 let cons_typ = self.infer_path(cons)?;
@@ -447,7 +437,7 @@ impl<'hir> TypeChecker<'hir> {
                     let arg_typs = self.infer_pats(args)?;
                     let ret_typ = self.fresh_var();
                     let cons_typ = self.instantiate(cons_typ);
-                    self.constrain(Ty::n_arrow(self.arena, arg_typs, ret_typ), cons_typ);
+                    self.constrain(Ty::n_arrow(self.hir_ctxt, arg_typs, ret_typ), cons_typ);
                     ret_typ
                 }
             }
@@ -477,7 +467,7 @@ impl<'hir> TypeChecker<'hir> {
                 let mut arg_typs = Vec::with_capacity(lambda.args.len());
                 let ret_typ =
                     self.check_lambda_var(lambda.args, lambda.body, expected, &mut arg_typs)?;
-                self.constrain(expected, Ty::n_arrow(self.arena, arg_typs, ret_typ));
+                self.constrain(expected, Ty::n_arrow(self.hir_ctxt, arg_typs, ret_typ));
             }
             (ExprKind::Lambda(lambda), TyKind::Arrow(..)) => {
                 self.check_lambda_arrow(lambda.args, lambda.body, expected)?
@@ -555,8 +545,8 @@ impl<'hir> TypeChecker<'hir> {
     ) -> Result<(), InferError<'hir>> {
         match (pat.kind, expected.kind()) {
             (PatKind::Wild, _) => (),
-            (PatKind::Var(_, hir_id), _) => {
-                self.env.insert(hir_id, expected);
+            (PatKind::Var(path), _) => {
+                self.hir_ctxt.set_type(path.res().hir_id(), expected);
             }
             (PatKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {

@@ -413,14 +413,14 @@ impl<'hir> Unifier<'hir, Ty<'hir>> for TypeChecker<'hir> {
             }
             (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
                 let l_h = self
-                    .env
-                    .get(&l_h.res().hir_id())
+                    .hir_ctxt
+                    .get_type(l_h.res().hir_id())
                     .ok_or(TypeUnifyError::Lookup(l_h))?;
                 let r_h = self
-                    .env
-                    .get(&r_h.res().hir_id())
+                    .hir_ctxt
+                    .get_type(r_h.res().hir_id())
                     .ok_or(TypeUnifyError::Lookup(r_h))?;
-                self.try_unify(*l_h, *r_h)?;
+                self.try_unify(l_h, r_h)?;
                 self.zip_unify(l_args, r_args)
             }
             (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
@@ -448,8 +448,8 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
                 if l_args.len() == r_args.len() =>
             {
                 std::iter::once(Constraint::equal(
-                    Ty::path(subs.arena, l_h),
-                    Ty::path(subs.arena, r_h),
+                    Ty::path(subs.ctxt, l_h),
+                    Ty::path(subs.ctxt, r_h),
                 ))
                 .chain(
                     l_args
@@ -506,7 +506,7 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
             (TyKind::Uni(a), TyKind::Uni(_)) if subs.occurs(a.id, r2) => {
                 //subs.insert(a.id, r1);
                 //Constraint::equal(l2, subs.apply(r2))
-                Constraint::equal(l2, r2.subst_uni_var(subs.arena, a, r1))
+                Constraint::equal(l2, r2.subst_uni_var(subs.ctxt, a, r1))
             }
             (_, _) => return None,
         })

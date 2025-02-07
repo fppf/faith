@@ -15,8 +15,6 @@ use core::{
 };
 use std::collections::{HashMap, HashSet};
 
-pub mod scoped;
-
 /// Type alias for a hashmap using the `fx` hash algorithm.
 pub type Map<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 

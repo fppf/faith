@@ -1,3 +1,5 @@
+// FIXME tests are broken, need to add way to query HirCtxt for type from path
+
 use driver::{Mode, Pass, Source};
 
 fn infer(top_level: &str, main: &str) -> String {
@@ -18,6 +20,7 @@ macro_rules! infer_ok {
         fn $name() {
             let buf = infer($top_level, $main);
             assert!(buf.contains($expected));
+            assert!(false); // see FIXME
         }
     };
     ($name:ident, $main:expr, $expected:expr) => {
@@ -25,6 +28,7 @@ macro_rules! infer_ok {
         fn $name() {
             let buf = infer("", $main);
             assert!(buf.contains($expected));
+            assert!(false); // see FIXME
         }
     };
 }
@@ -97,9 +101,7 @@ infer_ok! {
 
 infer_ok! {
     module_empty,
-    r"
-        mod m = {}
-    ",
+    "mod m = {}",
     "()",
     "()"
 }
@@ -107,9 +109,9 @@ infer_ok! {
 infer_ok! {
     module_single_value,
     r"
-        mod m = {
-            val x = ()
-        }
+       mod m = {
+          val x = ()
+       }
     ",
     "m.x",
     "()"
@@ -119,12 +121,52 @@ infer_ok! {
     module_nested,
     r"
        mod m = {
-           mod n = {
-               val id x = x       
-           }
-           val y = n.id
+          mod n = {
+             val id x = x       
+          }
+          val y = n.id
        }
     ",
     "m.y",
     "'a -> 'a"
+}
+
+infer_ok! {
+    ref_val_from_enclosing_mod,
+    r"
+       mod m = {
+           val x = false
+           mod n = {
+               mod o = {
+                   val y = x
+               }
+           }
+       }
+    ",
+    "m.n.y",
+    "bool"
+}
+
+infer_ok! {
+    simple_shadowing,
+    "let x = 0 in let x = true in x",
+    "bool"
+}
+
+infer_ok! {
+    sequenced_let_shadowing,
+    "let x = (), x = true in x",
+    "bool"
+}
+
+infer_ok! {
+    copy_shadowing,
+    "let x = () in let x = x in x",
+    "()"
+}
+
+infer_ok! {
+    branch_shadowing,
+    "let x = 0 in if true then let x = true in x else false; x",
+    "i32"
 }

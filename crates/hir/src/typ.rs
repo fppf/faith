@@ -7,7 +7,7 @@ use base::{
 };
 use span::{Ident, Sp, Span};
 
-use crate::{Arena, NO_WEB, Path, WebId};
+use crate::{Arena, HirCtxt, HirId, NO_WEB, Path, WebId};
 
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
@@ -33,14 +33,14 @@ impl Hash for Ty<'_> {
 #[cfg(test)]
 mod test {
     use super::{BaseType, TyKind};
-    use crate::Arena;
+    use crate::{Arena, HirCtxt};
     use span::{BytePos, Span};
 
     #[test]
     fn equality() {
-        let arena = Arena::default();
-        let t1 = arena.typ(TyKind::Base(BaseType::Unit), Span::from(0..1));
-        let t2 = arena.typ(TyKind::Base(BaseType::Unit), Span::from(1..2));
+        let ctxt = HirCtxt::default();
+        let t1 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(0..1));
+        let t2 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(1..2));
         assert_eq!(t1, t2);
     }
 }
@@ -231,7 +231,7 @@ pub trait Visitor<T>: Sized {
 }
 
 pub trait Folder<'hir, T>: Sized {
-    fn arena(&self) -> &'hir Arena<'hir>;
+    fn ctxt(&self) -> &'hir HirCtxt<'hir>;
 
     fn fold(&mut self, t: T) -> T;
 }
@@ -241,7 +241,7 @@ pub trait Substitutable<'hir>: Copy + PartialEq + fmt::Display {
 
     fn as_var(&self) -> Option<Self::Var>;
 
-    fn make_var(arena: &'hir Arena<'hir>, var: Self::Var) -> Self;
+    fn make_var(ctxt: &'hir HirCtxt<'hir>, var: Self::Var) -> Self;
 
     fn visit_with<V>(&self, v: &mut V)
     where
@@ -254,8 +254,8 @@ pub trait Substitutable<'hir>: Copy + PartialEq + fmt::Display {
 
 impl<'hir> Ty<'hir> {
     #[inline]
-    pub fn new(arena: &'hir Arena<'hir>, kind: TyKind<'hir>, span: Span) -> Self {
-        Ty(Interned::new_unchecked(arena.alloc(kind)), span)
+    pub fn new(ctxt: &'hir HirCtxt<'hir>, kind: TyKind<'hir>, span: Span) -> Self {
+        Ty(Interned::new_unchecked(ctxt.arena.alloc(kind)), span)
     }
 
     #[inline]
@@ -303,16 +303,22 @@ impl<'hir> Ty<'hir> {
             | TyKind::Var(_)
             | TyKind::Uni(_)
             | TyKind::Skolem(_) => return self,
-            TyKind::App(h, ts) => {
-                TyKind::App(h, f.arena().alloc_from_iter(ts.iter().map(|&t| f.fold(t))))
-            }
+            TyKind::App(h, ts) => TyKind::App(
+                h,
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
+            ),
             TyKind::Vector(t) => TyKind::Vector(f.fold(t)),
             TyKind::Arrow(u, t1, t2) => TyKind::Arrow(u, f.fold(t1), f.fold(t2)),
-            TyKind::Tuple(ts) => {
-                TyKind::Tuple(f.arena().alloc_from_iter(ts.iter().map(|&t| f.fold(t))))
-            }
+            TyKind::Tuple(ts) => TyKind::Tuple(
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
+            ),
             TyKind::Row(fields, ext) => TyKind::Row(
-                f.arena()
+                f.ctxt()
+                    .arena
                     .alloc_from_iter(fields.iter().map(|&(l, t)| (l, f.fold(t)))),
                 ext.map(|t| f.fold(t)),
             ),
@@ -320,32 +326,32 @@ impl<'hir> Ty<'hir> {
         if *self.kind() == kind {
             self
         } else {
-            f.arena().typ(kind, self.span())
+            f.ctxt().typ(kind, self.span())
         }
     }
 
-    pub fn tuple<I>(arena: &'hir Arena<'hir>, iter: I, span: Span) -> Self
+    pub fn tuple<I>(ctxt: &'hir HirCtxt<'hir>, iter: I, span: Span) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
-        arena.typ(TyKind::Tuple(arena.alloc_from_iter(iter)), span)
+        ctxt.typ(TyKind::Tuple(ctxt.arena.alloc_from_iter(iter)), span)
     }
 
-    pub fn app<I>(arena: &'hir Arena<'hir>, head: Path<'hir>, args: I, span: Span) -> Self
+    pub fn app<I>(ctxt: &'hir HirCtxt<'hir>, head: Path<'hir>, args: I, span: Span) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
-        arena.typ(TyKind::App(head, arena.alloc_from_iter(args)), span)
+        ctxt.typ(TyKind::App(head, ctxt.arena.alloc_from_iter(args)), span)
     }
 
-    pub fn arrow(arena: &'hir Arena<'hir>, web_id: WebId, source: Self, target: Self) -> Self {
-        arena.typ(
+    pub fn arrow(ctxt: &'hir HirCtxt<'hir>, web_id: WebId, source: Self, target: Self) -> Self {
+        ctxt.typ(
             TyKind::Arrow(web_id, source, target),
             source.span().merge(target.span()),
         )
     }
 
-    pub fn n_arrow<I>(arena: &'hir Arena<'hir>, sources: I, target: Self) -> Self
+    pub fn n_arrow<I>(ctxt: &'hir HirCtxt<'hir>, sources: I, target: Self) -> Self
     where
         I: IntoIterator<Item = Self>,
         I::IntoIter: DoubleEndedIterator,
@@ -353,23 +359,23 @@ impl<'hir> Ty<'hir> {
         sources
             .into_iter()
             .rev()
-            .fold(target, |acc, source| Ty::arrow(arena, NO_WEB, source, acc))
+            .fold(target, |acc, source| Ty::arrow(ctxt, NO_WEB, source, acc))
     }
 
-    pub fn path(arena: &'hir Arena<'hir>, path: Path<'hir>) -> Self {
-        arena.typ(TyKind::App(path, &[]), path.span())
+    pub fn path(ctxt: &'hir HirCtxt<'hir>, path: Path<'hir>) -> Self {
+        ctxt.typ(TyKind::App(path, &[]), path.span())
     }
 
-    pub fn type_var(arena: &'hir Arena<'hir>, var: TypeVar) -> Self {
-        arena.typ(TyKind::Var(var), var.name.span)
+    pub fn type_var(ctxt: &'hir HirCtxt<'hir>, var: TypeVar) -> Self {
+        ctxt.typ(TyKind::Var(var), var.name.span)
     }
 
-    pub fn uni_var(arena: &'hir Arena<'hir>, var: UniVar) -> Self {
-        arena.typ(TyKind::Uni(var), Span::dummy())
+    pub fn uni_var(ctxt: &'hir HirCtxt<'hir>, var: UniVar) -> Self {
+        ctxt.typ(TyKind::Uni(var), Span::dummy())
     }
 
-    pub fn skolem(arena: &'hir Arena<'hir>, skolem: Skolem) -> Self {
-        arena.typ(TyKind::Skolem(skolem), skolem.name.span)
+    pub fn skolem(ctxt: &'hir HirCtxt<'hir>, skolem: Skolem) -> Self {
+        ctxt.typ(TyKind::Skolem(skolem), skolem.name.span)
     }
 
     pub fn eq_alpha(&self, other: Self) -> bool {
@@ -450,16 +456,16 @@ impl<'hir> Ty<'hir> {
         vars.acc
     }
 
-    pub fn subst_uni_var(self, arena: &'hir Arena<'hir>, var: UniVar, typ: Self) -> Self {
+    pub fn subst_uni_var(self, ctxt: &'hir HirCtxt<'hir>, var: UniVar, typ: Self) -> Self {
         struct Subs<'a> {
-            arena: &'a Arena<'a>,
+            ctxt: &'a HirCtxt<'a>,
             var: UniVar,
             typ: Ty<'a>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for Subs<'a> {
-            fn arena(&self) -> &'a Arena<'a> {
-                self.arena
+            fn ctxt(&self) -> &'a HirCtxt<'a> {
+                self.ctxt
             }
 
             fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
@@ -473,7 +479,7 @@ impl<'hir> Ty<'hir> {
             }
         }
 
-        Subs { arena, var, typ }.fold(self)
+        Subs { ctxt, var, typ }.fold(self)
     }
 }
 
@@ -487,8 +493,8 @@ impl<'hir> Substitutable<'hir> for Ty<'hir> {
         }
     }
 
-    fn make_var(arena: &'hir Arena<'hir>, var: Self::Var) -> Self {
-        Ty::uni_var(arena, UniVar::new(var, Kind::new(0)))
+    fn make_var(ctxt: &'hir HirCtxt<'hir>, var: Self::Var) -> Self {
+        Ty::uni_var(ctxt, UniVar::new(var, Kind::new(0)))
     }
 
     fn visit_with<'a, V>(&self, v: &mut V)

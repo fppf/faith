@@ -38,24 +38,24 @@ pub fn run(src: Source, mode: Mode, stop_after: Pass) -> bool {
 }
 
 fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
-    let hir_arena = hir::Arena::default();
+    let hir_ctxt = hir::HirCtxt::default();
     let hir = match src {
-        Source::File(path) => hir::parse_and_lower_program_in(&hir_arena, &path),
-        Source::Str(src) => hir::parse_and_lower_str_program_in(&hir_arena, &src),
+        Source::File(path) => hir::parse_and_lower_program_in(&hir_ctxt, &path),
+        Source::Str(src) => hir::parse_and_lower_str_program_in(&hir_ctxt, &src),
     }?;
 
     if stop_after == Pass::Hir {
         return Ok(());
     }
 
-    let infer_data = infer::infer_program_in(&hir_arena, hir)?;
+    let infer_data = infer::infer_program_in(&hir_ctxt, hir)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
 
-    let mir = mir::lower(&hir_arena, infer_data, hir);
-    log::trace!("{mir}");
+    //let mir = mir::lower(&hir_ctxt, infer_data, hir);
+    //log::trace!("{mir}");
 
     Ok(())
 }

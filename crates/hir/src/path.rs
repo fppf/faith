@@ -142,11 +142,6 @@ impl<'hir> Path<'hir> {
     pub fn access_slice(&self) -> &[Ident] {
         self.0.access
     }
-
-    #[inline]
-    pub fn access_len(&self) -> usize {
-        self.0.access.len()
-    }
 }
 
 impl fmt::Debug for Path<'_> {
