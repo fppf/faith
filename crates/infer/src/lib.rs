@@ -19,17 +19,10 @@ use unify::{UnificationTable, UnifyKey};
 pub fn infer_program_in<'hir>(
     hir_ctxt: &'hir HirCtxt<'hir>,
     program: &'hir Program<'hir>,
-) -> Result<InferData<'hir>, Diagnostic> {
+) -> Result<(), Diagnostic> {
     TypeChecker::new(hir_ctxt, program)
         .infer()
         .map_err(Diagnostic::from)
-}
-
-#[derive(Default)]
-pub struct InferData<'hir> {
-    pub expr_types: Map<Expr<'hir>, Ty<'hir>>,
-    pub adts: Map<Ident, Ty<'hir>>,
-    pub ctor_to_adt: Map<Ident, (usize /* arity */, Ty<'hir> /* variant type */)>,
 }
 
 struct TypeChecker<'hir> {
@@ -40,7 +33,6 @@ struct TypeChecker<'hir> {
     constraints: Vec<Constraint<'hir, Ty<'hir>>>,
     subs: Substitution<'hir, Ty<'hir>>,
     webs: UnificationTable<WebId>,
-    infer_data: InferData<'hir>,
 }
 
 impl UnifyKey for WebId {
@@ -75,19 +67,15 @@ impl<'hir> TypeChecker<'hir> {
             constraints: Vec::new(),
             subs: Substitution::new(hir_ctxt),
             webs: UnificationTable::default(),
-            infer_data: InferData::default(),
         }
     }
 
-    fn infer(mut self) -> Result<InferData<'hir>, InferError<'hir>> {
+    fn infer(mut self) -> Result<(), InferError<'hir>> {
         self.infer_comp_unit(self.program.unit)?;
         let main_typ = self.infer_solve_expr(self.program.main)?;
         log::trace!("main : {main_typ}");
-        for (_, t) in self.infer_data.expr_types.iter_mut() {
-            *t = self.subs.apply(*t);
-        }
         assert!(self.hir_ctxt.is_ctxt_typed());
-        Ok(self.infer_data)
+        Ok(())
     }
 
     fn type_from_lit(&self, lit: hir::Lit, span: Span) -> Ty<'hir> {
@@ -213,7 +201,6 @@ impl<'hir> TypeChecker<'hir> {
         let res = self.infer_expr(expr)?;
         self.solve_current()?;
         let res = self.generalize(res);
-        self.infer_data.expr_types.insert(expr, res);
         Ok(res)
     }
 
@@ -268,9 +255,8 @@ impl<'hir> TypeChecker<'hir> {
         todo!()
     }
 
-    /// Infer a type for an expression.
     fn infer_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        let res = match *expr.kind() {
+        Ok(match *expr.kind() {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
@@ -360,9 +346,7 @@ impl<'hir> TypeChecker<'hir> {
                 self.constrain(then_typ, else_typ);
                 then_typ
             }
-        };
-        self.infer_data.expr_types.insert(expr, res);
-        Ok(res)
+        })
     }
 
     /// Infer the type of a lambda expression `(\args -> body)`.

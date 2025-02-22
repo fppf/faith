@@ -178,8 +178,8 @@ impl<'hir> Matrix<'hir> {
     fn bind_variable_patterns(&mut self) {
         for row in self.clauses.iter_mut() {
             row.tests.retain(|e| {
-                if let PatKind::Var(id, _) = e.pat.kind {
-                    row.body.bindings.push((id, e.id));
+                if let PatKind::Var(path) = e.pat.kind {
+                    row.body.bindings.push((path.id(), e.id));
                     false
                 } else {
                     true
@@ -235,11 +235,7 @@ impl<'hir> LoweringContext<'hir> {
     }
 
     fn specialize(&self, id: Ident, matrix: &Matrix<'hir>) -> Matrix<'hir> {
-        let (arity, typ) = self
-            .infer_data
-            .ctor_to_adt
-            .get(&id)
-            .expect("variant constructor not found");
+        let (arity, typ): (usize, hir::Ty<'hir>) = todo!();
 
         let mut matrix = Matrix::default();
 

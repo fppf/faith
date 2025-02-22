@@ -25,9 +25,8 @@ struct HirNode<'hir> {
     typ: OnceCell<Ty<'hir>>,
 }
 
-
 impl<'hir> HirCtxt<'hir> {
-    fn new_hir_node(&self) -> HirId {
+    pub fn new_hir_node(&self) -> HirId {
         let mut nodes = self.hir_nodes.borrow_mut();
         nodes.push(HirNode::default())
     }

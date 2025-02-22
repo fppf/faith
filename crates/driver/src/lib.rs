@@ -48,7 +48,7 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
         return Ok(());
     }
 
-    let infer_data = infer::infer_program_in(&hir_ctxt, hir)?;
+    infer::infer_program_in(&hir_ctxt, hir)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
