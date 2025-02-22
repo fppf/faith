@@ -253,7 +253,7 @@ impl HirPrinter {
                 self.break_offset_if_not_bol(1, -INDENT);
                 self.print_expr(body);
             }
-            ExprKind::App(_u, e, args) => {
+            ExprKind::Call(_u, e, args) => {
                 self.popen();
                 self.print_expr(e);
                 self.space();

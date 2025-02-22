@@ -227,7 +227,7 @@ pub enum ExprKind<'hir> {
     Tuple(&'hir [Expr<'hir>]),
     Vector(&'hir [Expr<'hir>]),
     Lambda(&'hir Lambda<'hir>),
-    App(WebId, &'hir Expr<'hir>, &'hir [Expr<'hir>]),
+    Call(WebId, &'hir Expr<'hir>, &'hir [Expr<'hir>]),
     Let(&'hir [LetBind<'hir>], &'hir Expr<'hir>),
     If(&'hir Expr<'hir>, &'hir Expr<'hir>, &'hir Expr<'hir>),
     Case(&'hir Expr<'hir>, &'hir [CaseArm<'hir>]),
@@ -334,7 +334,7 @@ impl<'hir> Expr<'hir> {
             ExprKind::Ann(e, _) => v.visit(e),
             ExprKind::Tuple(es) | ExprKind::Vector(es) => es.iter().for_each(|e| v.visit(e)),
             ExprKind::Lambda(l) => v.visit(&l.body),
-            ExprKind::App(_, e, args) => {
+            ExprKind::Call(_, e, args) => {
                 v.visit(e);
                 args.iter().for_each(|e| v.visit(e));
             }

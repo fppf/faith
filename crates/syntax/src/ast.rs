@@ -130,7 +130,7 @@ pub enum Expr<'ast> {
         &'ast Sp<Expr<'ast>>,
     ),
     Lambda(Lambda<'ast>),
-    App(&'ast Sp<Expr<'ast>>, &'ast [Sp<Expr<'ast>>]),
+    Call(&'ast Sp<Expr<'ast>>, &'ast [Sp<Expr<'ast>>]),
     Let(
         &'ast [(Sp<Pat<'ast>>, Sp<Expr<'ast>>)],
         &'ast Sp<Expr<'ast>>,

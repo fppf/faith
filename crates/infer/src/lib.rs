@@ -259,11 +259,11 @@ impl<'hir> TypeChecker<'hir> {
         Ok(match expr.kind {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
-            ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
+            ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
                 fn split_app<'a>(expr: &'a Expr<'a>) -> (&'a Expr<'a>, &'a [Expr<'a>]) {
                     match expr.kind {
                         ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
-                        ExprKind::App(_, h, args) => (h, args),
+                        ExprKind::Call(_, h, args) => (h, args),
                         _ => unreachable!(),
                     }
                 }

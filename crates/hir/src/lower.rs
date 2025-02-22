@@ -533,7 +533,7 @@ impl<'hir> LoweringContext<'hir> {
                             ExprKind::Path(p) if p.res().hir_id() == self.hir_id => {
                                 self.recursive_value = true;
                             }
-                            ExprKind::App(_, e, args) => {
+                            ExprKind::Call(_, e, args) => {
                                 if let ExprKind::Path(p) = e.kind
                                     && p.res().hir_id() == self.hir_id
                                 {
@@ -896,13 +896,13 @@ impl<'hir> LoweringContext<'hir> {
                 ExprKind::If(cond, e1, e2)
             }
             ast::Expr::Ann(e, t) => ExprKind::Ann(self.lower_expr(e)?, self.lower_type(t)?),
-            ast::Expr::App(head, es) => {
+            ast::Expr::Call(head, es) => {
                 let head = self.lower_expr(head)?;
                 let mut args = Vec::with_capacity(es.len());
                 for e in es.iter() {
                     args.push(self.lower_expr_mut(e)?);
                 }
-                ExprKind::App(hir::NO_WEB, head, self.hir_ctxt.arena.alloc_from_iter(args))
+                ExprKind::Call(hir::NO_WEB, head, self.hir_ctxt.arena.alloc_from_iter(args))
             }
             ast::Expr::Tuple(es) => {
                 let mut elems = Vec::with_capacity(es.len());

@@ -409,7 +409,7 @@ fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
         Ok(head)
     } else {
         Ok(Sp::new(
-            Expr::App(alloc!(p, head), alloc_iter!(p, args)),
+            Expr::Call(alloc!(p, head), alloc_iter!(p, args)),
             p.end(m),
         ))
     }
@@ -424,7 +424,7 @@ fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>
         p.bump_any();
         let rhs = expr_bp(p, r_bp)?;
         lhs = Sp::new(
-            Expr::App(alloc!(p, op), alloc_iter!(p, [lhs, rhs])),
+            Expr::Call(alloc!(p, op), alloc_iter!(p, [lhs, rhs])),
             p.end(m),
         );
     }

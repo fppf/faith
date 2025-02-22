@@ -294,7 +294,7 @@ impl<'hir> LoweringContext<'hir> {
                     mir::Expr::Let(bind.0, Box::new(bind.1), Box::new(acc))
                 })
             }
-            ExprKind::App(_u, e, args) => {
+            ExprKind::Call(_u, e, args) => {
                 // Lower (f e1 ... en) to
                 // let l1 = lower(e1) in ... let ln = lower(en) in (f l1 ... ln).
                 // If lower(ei) is already a label or literal, don't add a superfluous bind.
