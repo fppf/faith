@@ -333,7 +333,7 @@ impl<'hir> Expr<'hir> {
             | ExprKind::Lit(_) => (),
             ExprKind::Ann(e, _) => v.visit(e),
             ExprKind::Tuple(es) | ExprKind::Vector(es) => es.iter().for_each(|e| v.visit(e)),
-            ExprKind::Lambda(l) => v.visit(&l.body),
+            ExprKind::Lambda(l) => v.visit(l.body),
             ExprKind::Call(_, e, args) => {
                 v.visit(e);
                 args.iter().for_each(|e| v.visit(e));

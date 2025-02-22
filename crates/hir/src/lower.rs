@@ -550,7 +550,7 @@ impl<'hir> LoweringContext<'hir> {
                     recursive_function: false,
                     recursive_value: false,
                 };
-                recursive_visitor.visit(&expr);
+                recursive_visitor.visit(expr);
 
                 // Guard against recursive values, i.e. val x = x
                 if recursive_visitor.recursive_value {

@@ -262,7 +262,7 @@ impl<'hir> TypeChecker<'hir> {
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
                 let (head, args) = match expr.kind {
                     ExprKind::Call(_, head, args) => (head, args),
-                    ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[] as &[_]),
+                    ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[] as &[_]),
                     _ => unreachable!(),
                 };
                 let head_typ = match head.kind {
