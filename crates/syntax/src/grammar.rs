@@ -58,10 +58,13 @@ fn comp_unit_eof<'ast>(
     let m = p.start();
     while p.eat(NEWLINE) {}
     if !eof || p.at(EOF) {
-        Ok(alloc!(p, CompUnit {
-            source_id,
-            items: alloc_iter!(p, items),
-        }))
+        Ok(alloc!(
+            p,
+            CompUnit {
+                source_id,
+                items: alloc_iter!(p, items),
+            }
+        ))
     } else {
         while !p.at(EOF) {
             p.bump_any();
@@ -400,8 +403,7 @@ fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     let head = expr_atom(p)?;
     let mut args = Vec::new();
     while !p.at(EOF) && (at_expr_atom(p) || p.at(AT)) {
-        let arg = expr_arg(p)?;
-        args.push(arg);
+        args.push(expr_atom(p)?);
     }
     if args.is_empty() {
         Ok(head)
@@ -413,16 +415,6 @@ fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     }
 }
 
-fn expr_arg<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ExprArg<'ast>>> {
-    let m = p.start();
-    let arg = if p.eat(AT) {
-        ExprArg::Type(type_atom(p)?)
-    } else {
-        ExprArg::Expr(expr_atom(p)?)
-    };
-    Ok(Sp::new(arg, p.end(m)))
-}
-
 fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>> {
     let m = p.start();
     let mut lhs = expr_app(p)?;
@@ -431,16 +423,8 @@ fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>
     {
         p.bump_any();
         let rhs = expr_bp(p, r_bp)?;
-        let lhs_span = lhs.span;
-        let rhs_span = rhs.span;
         lhs = Sp::new(
-            Expr::App(
-                alloc!(p, op),
-                alloc_iter!(p, [
-                    Sp::new(ExprArg::Expr(lhs), lhs_span),
-                    Sp::new(ExprArg::Expr(rhs), rhs_span),
-                ]),
-            ),
+            Expr::App(alloc!(p, op), alloc_iter!(p, [lhs, rhs])),
             p.end(m),
         );
     }

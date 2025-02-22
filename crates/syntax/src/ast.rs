@@ -130,18 +130,12 @@ pub enum Expr<'ast> {
         &'ast Sp<Expr<'ast>>,
     ),
     Lambda(Lambda<'ast>),
-    App(&'ast Sp<Expr<'ast>>, &'ast [Sp<ExprArg<'ast>>]),
+    App(&'ast Sp<Expr<'ast>>, &'ast [Sp<Expr<'ast>>]),
     Let(
         &'ast [(Sp<Pat<'ast>>, Sp<Expr<'ast>>)],
         &'ast Sp<Expr<'ast>>,
     ),
     Seq(&'ast Sp<Expr<'ast>>, &'ast Sp<Expr<'ast>>),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ExprArg<'ast> {
-    Expr(Sp<Expr<'ast>>),
-    Type(Sp<Type<'ast>>),
 }
 
 #[derive(Clone, Copy, Debug)]

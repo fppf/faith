@@ -197,7 +197,7 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn infer_solve_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+    fn infer_solve_expr(&mut self, expr: &'hir Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
         let res = self.infer_expr(expr)?;
         self.solve_current()?;
         let res = self.generalize(res);
@@ -255,30 +255,27 @@ impl<'hir> TypeChecker<'hir> {
         todo!()
     }
 
-    fn infer_expr(&mut self, expr: Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        Ok(match *expr.kind() {
+    fn infer_expr(&mut self, expr: &'hir Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+        Ok(match expr.kind {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::App(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
-                fn split_app(expr: Expr<'_>) -> (Expr<'_>, &[ExprArg<'_>]) {
-                    match *expr.kind() {
+                fn split_app<'a>(expr: &'a Expr<'a>) -> (&'a Expr<'a>, &'a [Expr<'a>]) {
+                    match expr.kind {
                         ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
                         ExprKind::App(_, h, args) => (h, args),
                         _ => unreachable!(),
                     }
                 }
                 let (head, args) = split_app(expr);
-                let head_typ = match *head.kind() {
+                let head_typ = match head.kind {
                     ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
                     _ => self.infer_expr(head),
                 }?;
                 let mut typ = self.instantiate(head_typ);
                 for arg in args {
                     if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
-                        match *arg {
-                            ExprArg::Expr(e) => self.check_expr(e, arg_typ)?,
-                            ExprArg::Type(_) => todo!("VTA"),
-                        }
+                        self.check_expr(arg, arg_typ)?;
                         typ = ret_typ;
                     } else {
                         break;
@@ -287,12 +284,12 @@ impl<'hir> TypeChecker<'hir> {
                 typ
             }
             ExprKind::External(_, typ) => typ,
-            ExprKind::Lit(l) => self.type_from_lit(l, expr.span()),
+            ExprKind::Lit(l) => self.type_from_lit(l, expr.span),
             ExprKind::Lambda(lambda) => self.infer_lambda(lambda.args, lambda.body)?,
             ExprKind::Let(binds, body) => {
                 for bind in binds {
                     let pat_typ = self.infer_pat(&bind.0)?;
-                    let bind_typ = self.infer_expr(bind.1)?;
+                    let bind_typ = self.infer_expr(&bind.1)?;
                     self.constrain(pat_typ, bind_typ);
                 }
                 self.infer_expr(body)?
@@ -303,18 +300,18 @@ impl<'hir> TypeChecker<'hir> {
             }
             ExprKind::Tuple(elems) => {
                 let mut typs = Vec::with_capacity(elems.len());
-                for &elem in elems {
+                for elem in elems {
                     typs.push(self.infer_expr(elem)?);
                 }
-                Ty::tuple(self.hir_ctxt, typs, expr.span())
+                Ty::tuple(self.hir_ctxt, typs, expr.span)
             }
             ExprKind::Vector(elems) => {
                 let base_typ = self.fresh_var();
-                for &elem in elems {
+                for elem in elems {
                     let elem_typ = self.infer_expr(elem)?;
                     self.constrain(base_typ, elem_typ);
                 }
-                self.hir_ctxt.typ(TyKind::Vector(base_typ), expr.span())
+                self.hir_ctxt.typ(TyKind::Vector(base_typ), expr.span)
             }
             ExprKind::Seq(e1, e2) => {
                 self.check_expr(
@@ -330,7 +327,7 @@ impl<'hir> TypeChecker<'hir> {
                 for arm in arms {
                     let pat_typ = self.infer_pat(&arm.0)?;
                     self.constrain(typ, pat_typ);
-                    let arm_typ = self.infer_expr(arm.1)?;
+                    let arm_typ = self.infer_expr(&arm.1)?;
                     self.constrain(var, arm_typ);
                 }
                 var
@@ -353,7 +350,7 @@ impl<'hir> TypeChecker<'hir> {
     fn infer_lambda(
         &mut self,
         args: &'hir [Pat<'hir>],
-        body: Expr<'hir>,
+        body: &'hir Expr<'hir>,
     ) -> Result<Ty<'hir>, InferError<'hir>> {
         if let Some((first, rest)) = args.split_first() {
             let arg_typ = self.infer_pat(first)?;
@@ -438,12 +435,16 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     /// Check an expression against a type.
-    fn check_expr(&mut self, expr: Expr<'hir>, expected: Ty<'hir>) -> Result<(), InferError<'hir>> {
+    fn check_expr(
+        &mut self,
+        expr: &'hir Expr<'hir>,
+        expected: Ty<'hir>,
+    ) -> Result<(), InferError<'hir>> {
         //let expected = self.skolemize(expected);
-        match (*expr.kind(), expected.kind()) {
+        match (expr.kind, expected.kind()) {
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (ExprKind::Lit(l), TyKind::Var(_)) => {
-                self.constrain(expected, self.type_from_lit(l, expr.span()));
+                self.constrain(expected, self.type_from_lit(l, expr.span));
             }
 
             // TODO. these branches probably aren't necessary
@@ -459,11 +460,11 @@ impl<'hir> TypeChecker<'hir> {
 
             (ExprKind::Tuple(es), TyKind::Tuple(ts)) => {
                 if es.len() == ts.len() {
-                    for (&e, &t) in es.iter().zip(*ts) {
+                    for (e, &t) in es.iter().zip(*ts) {
                         self.check_expr(e, t)?;
                     }
                 } else {
-                    return Err(InferError::ExprTupleLength(expr.span(), es.len(), ts.len()));
+                    return Err(InferError::ExprTupleLength(expr.span, es.len(), ts.len()));
                 }
             }
             (ExprKind::Case(scrutinee, arms), _) => {
@@ -471,7 +472,7 @@ impl<'hir> TypeChecker<'hir> {
                 for arm in arms {
                     let pat_typ = self.infer_pat(&arm.0)?;
                     self.constrain(typ, pat_typ);
-                    let arm_typ = self.infer_expr(arm.1)?;
+                    let arm_typ = self.infer_expr(&arm.1)?;
                     self.constrain(arm_typ, expected);
                 }
             }
@@ -486,7 +487,7 @@ impl<'hir> TypeChecker<'hir> {
     fn check_lambda_var(
         &mut self,
         args: &'hir [Pat<'hir>],
-        body: Expr<'hir>,
+        body: &'hir Expr<'hir>,
         var: Ty<'hir>,
         arg_typs: &mut Vec<Ty<'hir>>,
     ) -> Result<Ty<'hir>, InferError<'hir>> {
@@ -504,7 +505,7 @@ impl<'hir> TypeChecker<'hir> {
     fn check_lambda_arrow(
         &mut self,
         args: &'hir [Pat<'hir>],
-        body: Expr<'hir>,
+        body: &'hir Expr<'hir>,
         arrow: Ty<'hir>,
     ) -> Result<(), InferError<'hir>> {
         if let Some((first, rest)) = args.split_first() {

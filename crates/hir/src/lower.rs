@@ -18,9 +18,9 @@ use span::{
 use syntax::ast;
 
 use crate::{
-    Arena, Constructor, DefKind, HirCtxt, HirId, HirMap, Res, TypeDecl, UniVar, UniVarId, Value,
-    Visitor,
-    hir::{self, Ty},
+    self as hir, Constructor, HirCtxt, HirId, HirMap, Res, Ty, TypeDecl, Value, Visitor,
+    path::DefKind,
+    typ::{UniVar, UniVarId},
 };
 
 pub(crate) fn lower_program_in<'ast, 'hir>(
@@ -526,15 +526,15 @@ impl<'hir> LoweringContext<'hir> {
                     recursive_value: bool,
                 }
 
-                impl<'a> Visitor<hir::Expr<'a>> for RecursiveVisitor {
-                    fn visit(&mut self, expr: hir::Expr<'a>) {
+                impl<'a> Visitor<&'a hir::Expr<'a>> for RecursiveVisitor {
+                    fn visit(&mut self, expr: &'a hir::Expr<'a>) {
                         use hir::ExprKind;
-                        match expr.kind() {
+                        match expr.kind {
                             ExprKind::Path(p) if p.res().hir_id() == self.hir_id => {
                                 self.recursive_value = true;
                             }
                             ExprKind::App(_, e, args) => {
-                                if let ExprKind::Path(p) = e.kind()
+                                if let ExprKind::Path(p) = e.kind
                                     && p.res().hir_id() == self.hir_id
                                 {
                                     self.recursive_function = true;
@@ -550,7 +550,7 @@ impl<'hir> LoweringContext<'hir> {
                     recursive_function: false,
                     recursive_value: false,
                 };
-                recursive_visitor.visit(expr);
+                recursive_visitor.visit(&expr);
 
                 // Guard against recursive values, i.e. val x = x
                 if recursive_visitor.recursive_value {
@@ -579,9 +579,10 @@ impl<'hir> LoweringContext<'hir> {
                     path,
                     hir_id,
                     recursive: false,
-                    expr: self
-                        .hir_ctxt
-                        .expr(hir::ExprKind::External(s.sym, typ), s.span),
+                    expr: self.hir_ctxt.arena.alloc(
+                        self.hir_ctxt
+                            .expr(hir::ExprKind::External(s.sym, typ), s.span),
+                    ),
                     typ: Some(typ),
                 };
                 self.current_module_mut().values.insert(id, hir_id);
@@ -641,7 +642,7 @@ impl<'hir> LoweringContext<'hir> {
                 hir_id,
                 Ty::uni_var(
                     self.hir_ctxt,
-                    UniVar::new(UniVarId::from_u32(u32::MAX), hir::Kind::new(0)),
+                    UniVar::new(UniVarId::from_u32(u32::MAX), hir::typ::Kind::new(0)),
                 ),
             );
         }
@@ -674,7 +675,7 @@ impl<'hir> LoweringContext<'hir> {
                     decl.id,
                     [],
                     decl.span,
-                    Res::Def(hir::DefKind::Type, hir_id),
+                    Res::Def(hir::path::DefKind::Type, hir_id),
                 );
                 let typ = Ty::app(
                     self.hir_ctxt,
@@ -693,12 +694,15 @@ impl<'hir> LoweringContext<'hir> {
                     let cons_hir_id = self.hir_ctxt.new_hir_node();
                     constructors.insert(cons_hir_id);
                     self.current_module_mut().values.insert(id, cons_hir_id);
-                    self.constructors.insert(cons_hir_id, Constructor {
-                        id,
-                        typ: cons_typ,
-                        arity: new_args.len(),
-                        decl: hir_id,
-                    });
+                    self.constructors.insert(
+                        cons_hir_id,
+                        Constructor {
+                            id,
+                            typ: cons_typ,
+                            arity: new_args.len(),
+                            decl: hir_id,
+                        },
+                    );
                     self.hir_ctxt.set_type(cons_hir_id, cons_typ);
                 }
                 hir::TypeDeclKind::Variant(self.hir_ctxt.arena.alloc(constructors))
@@ -820,29 +824,34 @@ impl<'hir> LoweringContext<'hir> {
             ),
             ast::Pat::Or(ps) => PatKind::Or(self.lower_pats(ps)?),
         };
-        Ok(hir::Pat {
-            kind,
-            span: pat.span,
-        })
+        Ok(self.hir_ctxt.pat(kind, pat.span))
     }
 
     fn lower_lambda<'ast>(
         &mut self,
         lambda: ast::Lambda<'ast>,
-    ) -> Result<hir::Lambda<'hir>, LowerError> {
+    ) -> Result<&'hir hir::Lambda<'hir>, LowerError> {
         self.check_duplicates_group(lambda.args)?;
         self.with_local_scope(|self_| {
             let args = self_.lower_pats(lambda.args)?;
             let body = self_.lower_expr(lambda.body)?;
-            Ok(hir::Lambda {
+            Ok(&*self_.hir_ctxt.arena.alloc(hir::Lambda {
                 web_id: hir::NO_WEB,
                 args,
                 body,
-            })
+            }))
         })
     }
 
     fn lower_expr<'ast>(
+        &mut self,
+        expr: &'ast Sp<ast::Expr<'ast>>,
+    ) -> Result<&'hir hir::Expr<'hir>, LowerError> {
+        self.lower_expr_mut(expr)
+            .map(|e| &*self.hir_ctxt.arena.alloc(e))
+    }
+
+    fn lower_expr_mut<'ast>(
         &mut self,
         expr: &'ast Sp<ast::Expr<'ast>>,
     ) -> Result<hir::Expr<'hir>, LowerError> {
@@ -860,7 +869,7 @@ impl<'hir> LoweringContext<'hir> {
                     for bind in binds.iter() {
                         self_.check_duplicates_one(&bind.0)?;
                         let p = self_.lower_pat_mut(&bind.0)?;
-                        let e = self_.lower_expr(&bind.1)?;
+                        let e = self_.lower_expr_mut(&bind.1)?;
                         new_binds.push((p, e));
                     }
                     self_.lower_expr(body)
@@ -874,7 +883,7 @@ impl<'hir> LoweringContext<'hir> {
                     self.check_duplicates_one(&arm.0)?;
                     new_arms.push(self.with_local_scope(|self_| {
                         let p = self_.lower_pat_mut(&arm.0)?;
-                        let e = self_.lower_expr(&arm.1)?;
+                        let e = self_.lower_expr_mut(&arm.1)?;
                         Ok((p, e))
                     })?);
                 }
@@ -891,21 +900,21 @@ impl<'hir> LoweringContext<'hir> {
                 let head = self.lower_expr(head)?;
                 let mut args = Vec::with_capacity(es.len());
                 for e in es.iter() {
-                    args.push(self.lower_expr_arg(e)?);
+                    args.push(self.lower_expr_mut(e)?);
                 }
                 ExprKind::App(hir::NO_WEB, head, self.hir_ctxt.arena.alloc_from_iter(args))
             }
             ast::Expr::Tuple(es) => {
                 let mut elems = Vec::with_capacity(es.len());
                 for e in es.iter() {
-                    elems.push(self.lower_expr(e)?);
+                    elems.push(self.lower_expr_mut(e)?);
                 }
                 ExprKind::Tuple(self.hir_ctxt.arena.alloc_from_iter(elems))
             }
             ast::Expr::Vector(es) => {
                 let mut elems = Vec::with_capacity(es.len());
                 for e in es.iter() {
-                    elems.push(self.lower_expr(e)?);
+                    elems.push(self.lower_expr_mut(e)?);
                 }
                 ExprKind::Vector(self.hir_ctxt.arena.alloc_from_iter(elems))
             }
@@ -916,16 +925,6 @@ impl<'hir> LoweringContext<'hir> {
             }
         };
         Ok(self.hir_ctxt.expr(kind, expr.span))
-    }
-
-    fn lower_expr_arg<'ast>(
-        &mut self,
-        expr_arg: &'ast Sp<ast::ExprArg<'ast>>,
-    ) -> Result<hir::ExprArg<'hir>, LowerError> {
-        Ok(match &**expr_arg {
-            ast::ExprArg::Expr(e) => hir::ExprArg::Expr(self.lower_expr(e)?),
-            ast::ExprArg::Type(t) => hir::ExprArg::Type(self.lower_type(t)?),
-        })
     }
 
     fn lower_lit(&self, lit: ast::Lit, span: Span) -> Result<hir::Lit, LowerError> {
@@ -964,23 +963,23 @@ impl Duplicates {
     }
 }
 
-fn visit_with<'ast, V>(pat: Sp<ast::Pat<'ast>>, v: &mut V)
+fn visit_with<'ast, V>(pat: &'ast Sp<ast::Pat<'ast>>, v: &mut V)
 where
-    V: Visitor<Sp<ast::Pat<'ast>>>,
+    V: Visitor<&'ast Sp<ast::Pat<'ast>>>,
 {
     use ast::Pat;
-    match *pat {
-        Pat::Ann(p, _) => v.visit(*p),
+    match **pat {
+        Pat::Ann(p, _) => v.visit(p),
         Pat::Constructor(_, ps) | Pat::Tuple(ps) | Pat::Or(ps) => {
-            ps.iter().for_each(|&p| v.visit(p))
+            ps.iter().for_each(|p| v.visit(p))
         }
         Pat::Wild | Pat::Var(_) | Pat::Lit(_) => (),
     }
 }
 
-impl<'ast> Visitor<Sp<ast::Pat<'ast>>> for Duplicates {
-    fn visit(&mut self, pat: Sp<ast::Pat<'ast>>) {
-        if let ast::Pat::Var(id) = *pat {
+impl<'ast> Visitor<&'ast Sp<ast::Pat<'ast>>> for Duplicates {
+    fn visit(&mut self, pat: &'ast Sp<ast::Pat<'ast>>) {
+        if let ast::Pat::Var(id) = **pat {
             self.bindings
                 .entry(id.sym)
                 .and_modify(|e| e.1.push(id.span))
@@ -993,7 +992,7 @@ impl<'ast> Visitor<Sp<ast::Pat<'ast>>> for Duplicates {
 impl LoweringContext<'_> {
     fn check_duplicates_one<'ast>(&self, pat: &'ast Sp<ast::Pat<'ast>>) -> Result<(), LowerError> {
         let mut dups = Duplicates::default();
-        dups.visit(*pat);
+        dups.visit(pat);
         dups.check()
     }
 
@@ -1003,7 +1002,7 @@ impl LoweringContext<'_> {
     ) -> Result<(), LowerError> {
         let mut dups = Duplicates::default();
         for pat in pats {
-            dups.visit(*pat);
+            dups.visit(pat);
         }
         dups.check()
     }

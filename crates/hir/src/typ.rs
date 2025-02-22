@@ -47,8 +47,6 @@ mod test {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyKind<'hir> {
-    /// An abstract type.
-    Abstract,
     /// A base/builtin type.
     Base(BaseType),
 
@@ -273,11 +271,7 @@ impl<'hir> Ty<'hir> {
         V: Visitor<Self>,
     {
         match *self.kind() {
-            TyKind::Abstract
-            | TyKind::Base(_)
-            | TyKind::Var(_)
-            | TyKind::Uni(_)
-            | TyKind::Skolem(_) => (),
+            TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => (),
             TyKind::Vector(t) => v.visit(t),
             TyKind::Arrow(_, t1, t2) => {
                 v.visit(t1);
@@ -298,11 +292,7 @@ impl<'hir> Ty<'hir> {
         F: Folder<'hir, Self>,
     {
         let kind = match *self.kind() {
-            TyKind::Abstract
-            | TyKind::Base(_)
-            | TyKind::Var(_)
-            | TyKind::Uni(_)
-            | TyKind::Skolem(_) => return self,
+            TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => return self,
             TyKind::App(h, ts) => TyKind::App(
                 h,
                 f.ctxt()

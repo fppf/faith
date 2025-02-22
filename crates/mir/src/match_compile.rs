@@ -192,7 +192,7 @@ impl<'hir> Matrix<'hir> {
 impl<'hir> LoweringContext<'hir> {
     pub fn match_compile(
         &mut self,
-        scrutinee: Expr<'hir>,
+        scrutinee: &'hir Expr<'hir>,
         arms: &'hir [CaseArm<'hir>],
     ) -> (Label, DecisionTree) {
         let (label, scrutinee_id, arms) = self.preprocess_case(scrutinee, arms);

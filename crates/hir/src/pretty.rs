@@ -6,8 +6,8 @@ use std::{
 use base::pp::*;
 
 use crate::{
-    CompUnit, Expr, ExprArg, ExprKind, HirId, Ident, Items, Lambda, Lit, NO_WEB, Pat, PatKind,
-    Path, Program, Ty, TyKind, WebId,
+    CompUnit, Expr, ExprKind, HirId, Ident, Items, Lambda, Lit, NO_WEB, Pat, PatKind, Path,
+    Program, Ty, TyKind, WebId,
 };
 
 impl fmt::Display for WebId {
@@ -35,16 +35,7 @@ impl fmt::Display for Program<'_> {
 
 impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        HirPrinter::to_string(|p| p.print_expr(*self)).fmt(f)
-    }
-}
-
-impl fmt::Display for ExprArg<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExprArg::Expr(e) => e.fmt(f),
-            ExprArg::Type(t) => write!(f, "@{t}"),
-        }
+        HirPrinter::to_string(|p| p.print_expr(self)).fmt(f)
     }
 }
 
@@ -170,7 +161,6 @@ impl HirPrinter {
 
     fn print_type(&mut self, typ: Ty<'_>, prec: TypePrec) {
         match *typ.kind() {
-            TyKind::Abstract => self.word("<abs>"),
             TyKind::Base(b) => self.word(b.to_string()),
             TyKind::Uni(v) => self.word(v.to_string()),
             TyKind::Var(v) => self.word(v.to_string()),
@@ -221,9 +211,9 @@ impl HirPrinter {
         self.word(hir_id.to_string());
     }
 
-    fn print_expr(&mut self, expr: Expr<'_>) {
+    fn print_expr(&mut self, expr: &Expr<'_>) {
         self.ibox(INDENT);
-        match *expr.kind() {
+        match expr.kind {
             ExprKind::Path(p) => self.print_path(p),
             ExprKind::Constructor(p) => self.print_path(p),
             ExprKind::Lit(l) => self.print_lit(l),
@@ -238,14 +228,14 @@ impl HirPrinter {
             ExprKind::Tuple(es) => {
                 self.popen();
                 self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
-                    pp.print_expr(*e)
+                    pp.print_expr(e)
                 });
                 self.pclose();
             }
             ExprKind::Vector(es) => {
                 self.word("[");
                 self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
-                    pp.print_expr(*e)
+                    pp.print_expr(e)
                 });
                 self.word("]");
             }
@@ -268,7 +258,7 @@ impl HirPrinter {
                 self.print_expr(e);
                 self.space();
                 self.strsep("", false, Breaks::Inconsistent, args, |pp, arg| {
-                    pp.print_expr_arg(*arg)
+                    pp.print_expr(arg)
                 });
                 self.pclose();
             }
@@ -292,21 +282,11 @@ impl HirPrinter {
         self.end();
     }
 
-    fn print_expr_arg(&mut self, arg: ExprArg<'_>) {
-        match arg {
-            ExprArg::Expr(e) => self.print_expr(e),
-            ExprArg::Type(t) => {
-                self.word("@");
-                self.print_type(t, TypePrec::Arg);
-            }
-        }
-    }
-
     fn print_bind(&mut self, (pat, expr): &(Pat<'_>, Expr<'_>)) {
         self.print_pat(pat);
         self.space();
         self.word_space("=");
-        self.print_expr(*expr);
+        self.print_expr(expr);
     }
 
     fn print_arm(&mut self, (pat, expr): &(Pat<'_>, Expr<'_>)) {
@@ -316,13 +296,13 @@ impl HirPrinter {
         self.print_pat(pat);
         self.space();
         self.word_space("=>");
-        self.print_expr(*expr);
+        self.print_expr(expr);
         self.end();
         self.word(",");
         self.end();
     }
 
-    fn print_lambda(&mut self, lambda: Lambda<'_>) {
+    fn print_lambda(&mut self, lambda: &Lambda<'_>) {
         self.popen();
         self.word("\\");
         self.strsep("", false, Breaks::Inconsistent, lambda.args, |pp, p| {
