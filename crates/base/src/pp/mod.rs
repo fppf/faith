@@ -480,7 +480,7 @@ impl Printer {
     fn print_string(&mut self, string: &str) {
         self.out.reserve(self.pending_indentation as usize);
         self.out
-            .extend(std::iter::repeat(' ').take(self.pending_indentation as usize));
+            .extend(std::iter::repeat_n(' ', self.pending_indentation as usize));
         self.pending_indentation = 0;
         self.out.push_str(string);
         self.space -= string.len() as isize;

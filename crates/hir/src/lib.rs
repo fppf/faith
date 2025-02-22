@@ -14,6 +14,7 @@ pub use hir::*;
 
 use span::diag::Diagnostic;
 
+#[derive(Default)]
 pub struct HirCtxt<'hir> {
     pub arena: Arena<'hir>,
     hir_nodes: RefCell<IndexVec<HirId, HirNode<'hir>>>,
@@ -24,14 +25,6 @@ struct HirNode<'hir> {
     typ: OnceCell<Ty<'hir>>,
 }
 
-impl<'hir> Default for HirCtxt<'hir> {
-    fn default() -> Self {
-        Self {
-            arena: Arena::default(),
-            hir_nodes: RefCell::default(),
-        }
-    }
-}
 
 impl<'hir> HirCtxt<'hir> {
     fn new_hir_node(&self) -> HirId {
@@ -41,7 +34,7 @@ impl<'hir> HirCtxt<'hir> {
 
     pub fn is_ctxt_typed(&self) -> bool {
         self.hir_nodes.borrow().iter_enumerated().all(|(id, node)| {
-            if !node.typ.get().is_some() {
+            if node.typ.get().is_none() {
                 println!("{id} -> ???");
                 false
             } else {

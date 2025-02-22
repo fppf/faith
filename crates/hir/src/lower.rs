@@ -374,7 +374,7 @@ impl<'hir> LoweringContext<'hir> {
             log::trace!("{}.{}.{id} -> {hir_id}", root, access.iter().format("."));
             self.hir_ctxt.path(
                 root,
-                access.into_iter().copied().chain(std::iter::once(id)),
+                access.iter().copied().chain(std::iter::once(id)),
                 id.span,
                 Res::Def(DefKind::Value, hir_id),
             )
