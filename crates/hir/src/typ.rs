@@ -1,13 +1,13 @@
-use std::{fmt, hash::Hash, iter::Skip};
+use std::{fmt, hash::Hash};
 
 use base::{
     arena::Interned,
     hash::{IndexSet, Map, Set},
     index::Idx,
 };
-use span::{Ident, Sp, Span};
+use span::{Ident, Span};
 
-use crate::{Arena, HirCtxt, HirId, NO_WEB, Path, WebId};
+use crate::{HirCtxt, NO_WEB, Path, WebId};
 
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
@@ -32,9 +32,8 @@ impl Hash for Ty<'_> {
 
 #[cfg(test)]
 mod test {
-    use super::{BaseType, TyKind};
-    use crate::{Arena, HirCtxt};
-    use span::{BytePos, Span};
+    use crate::{BaseType, HirCtxt, TyKind};
+    use span::Span;
 
     #[test]
     fn equality() {

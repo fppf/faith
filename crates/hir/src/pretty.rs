@@ -6,8 +6,8 @@ use std::{
 use base::pp::*;
 
 use crate::{
-    CompUnit, Expr, ExprKind, HirId, Ident, Items, Lambda, Lit, NO_WEB, Pat, PatKind, Path,
-    Program, Ty, TyKind, WebId,
+    CompUnit, Expr, ExprKind, Items, Lambda, Lit, NO_WEB, Pat, PatKind, Path, Program, Ty, TyKind,
+    WebId,
 };
 
 impl fmt::Display for WebId {
@@ -99,7 +99,7 @@ impl HirPrinter {
         self.print_items(unit.items);
     }
 
-    fn print_items(&mut self, items: &Items) {
+    fn print_items(&mut self, _items: &Items) {
         self.pp.cbox(INDENT);
         self.word("values [");
         //self.word(items.values.iter().format(",").to_string());
@@ -199,16 +199,8 @@ impl HirPrinter {
         self.word(lit.to_string());
     }
 
-    fn print_ident(&mut self, id: Ident) {
-        self.word(id.to_string());
-    }
-
     fn print_path(&mut self, path: Path<'_>) {
         self.word(path.to_string());
-    }
-
-    fn print_hir_id(&mut self, hir_id: HirId) {
-        self.word(hir_id.to_string());
     }
 
     fn print_expr(&mut self, expr: &Expr<'_>) {

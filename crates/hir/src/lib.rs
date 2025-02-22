@@ -1,5 +1,4 @@
 #![feature(let_chains)]
-#![allow(unused)]
 
 mod lower;
 mod path;
@@ -7,16 +6,16 @@ mod pretty;
 mod typ;
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{OnceCell, RefCell},
     fmt,
 };
 
 use base::{
     hash::{IndexMap, Map, Set},
-    index::{Idx, IndexVec},
+    index::IndexVec,
 };
 
-use span::{Ident, SourceId, Sp, Span, Sym, diag::Diagnostic};
+use span::{Ident, SourceId, Span, Sym, diag::Diagnostic};
 
 pub use path::*;
 pub use typ::*;
@@ -58,9 +57,9 @@ impl<'hir> HirCtxt<'hir> {
     }
 
     pub fn set_type(&self, hir_id: HirId, typ: Ty<'hir>) {
-        let mut nodes = self.hir_nodes.borrow_mut();
-        let mut node = nodes.get_mut(hir_id).unwrap();
-        node.typ.set(typ);
+        let nodes = self.hir_nodes.borrow();
+        let node = nodes.get(hir_id).unwrap();
+        node.typ.set(typ).expect("Wrote type twice");
     }
 }
 
@@ -115,7 +114,7 @@ impl<'hir> HirCtxt<'hir> {
             hir_id,
             kind,
             span,
-            private: private::HirCtxtOnlyZst,
+            _ctxt_marker: private::HirCtxtMarker,
         }
     }
 
@@ -131,7 +130,7 @@ impl<'hir> HirCtxt<'hir> {
             hir_id,
             kind,
             span,
-            private: private::HirCtxtOnlyZst,
+            _ctxt_marker: private::HirCtxtMarker,
         }
     }
 }
@@ -159,7 +158,7 @@ pub const NO_WEB: WebId = WebId::ZERO;
 mod private {
     /// Used to mark things which should only be created via HirCtxt.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub struct HirCtxtOnlyZst;
+    pub struct HirCtxtMarker;
 }
 
 #[derive(Clone, Debug)]
@@ -214,7 +213,7 @@ pub struct Expr<'hir> {
     pub hir_id: HirId,
     pub kind: ExprKind<'hir>,
     pub span: Span,
-    private: private::HirCtxtOnlyZst,
+    _ctxt_marker: private::HirCtxtMarker,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -255,7 +254,7 @@ pub struct Pat<'hir> {
     pub hir_id: HirId,
     pub kind: PatKind<'hir>,
     pub span: Span,
-    private: private::HirCtxtOnlyZst,
+    _ctxt_marker: private::HirCtxtMarker,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

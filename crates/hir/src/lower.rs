@@ -8,7 +8,7 @@ use std::{
 
 use base::{
     hash::{Map, Set},
-    index::{Idx, IndexVec},
+    index::IndexVec,
     pp::FormatIterator,
 };
 use span::{
@@ -34,7 +34,6 @@ pub(crate) fn lower_program_in<'ast, 'hir>(
 
 enum LowerError {
     Parse(Diagnostic),
-    Unbound(Sym, Span),
     Resolve(String, Span),
     DuplicateLocalBinding(Sym, Span, Vec<Span>),
     DuplicateItemBinding(Namespace, Sym, Span, Span),
@@ -46,9 +45,6 @@ impl From<LowerError> for Diagnostic {
     fn from(error: LowerError) -> Self {
         match error {
             LowerError::Parse(diag) => diag,
-            LowerError::Unbound(sym, span) => Diagnostic::new(Level::Error)
-                .with_message(format!("identifier `{sym}` not found in scope"))
-                .with_labels(vec![Label::new(span, "undefined")]),
             LowerError::Resolve(path, span) => Diagnostic::new(Level::Error)
                 .with_message(format!("cannot resolve `{path}`"))
                 .with_labels(vec![Label::new(span, "not found").primary()]),
@@ -107,7 +103,7 @@ impl Module {
 
 #[derive(Debug)]
 enum ModuleKind {
-    Inline(Ident),
+    Inline,
     Unit(SourceId),
 }
 
@@ -267,7 +263,7 @@ impl<'hir> LoweringContext<'hir> {
         for &module_id in self.module_stack.iter().rev() {
             let module = self.modules.get(module_id).unwrap();
             match module.kind {
-                ModuleKind::Inline(_) => (),
+                ModuleKind::Inline => (),
                 ModuleKind::Unit(source_id) => return source_id,
             }
         }
@@ -533,7 +529,7 @@ impl<'hir> LoweringContext<'hir> {
                             ExprKind::Path(p) if p.res().hir_id() == self.hir_id => {
                                 self.recursive_value = true;
                             }
-                            ExprKind::Call(_, e, args) => {
+                            ExprKind::Call(_, e, _) => {
                                 if let ExprKind::Path(p) = e.kind
                                     && p.res().hir_id() == self.hir_id
                                 {
@@ -592,9 +588,9 @@ impl<'hir> LoweringContext<'hir> {
             ast::Item::Mod(id, mexpr) => {
                 seen.update(Namespace::Mod, id)?;
                 let kind = match **mexpr {
-                    ast::ModExpr::Path(p) => todo!(),
+                    ast::ModExpr::Path(_p) => todo!(),
                     ast::ModExpr::Struct(items) => {
-                        let module_id = self.modules.push(Module::new(ModuleKind::Inline(id)));
+                        let module_id = self.modules.push(Module::new(ModuleKind::Inline));
                         self.current_module_mut().modules.insert(id, module_id);
                         self.local_module_stack.push(id);
                         let items =
