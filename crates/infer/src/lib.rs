@@ -83,7 +83,7 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
-        log::trace!("{lhs} ~ {rhs}");
+        //log::trace!("{lhs} ~ {rhs}");
         self.constraints.push(Constraint::equal(lhs, rhs));
     }
 
@@ -205,11 +205,31 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn infer_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) -> Result<(), InferError<'hir>> {
-        let mexpr = self.hir_ctxt.arena.alloc(ModExpr {
-            kind: ModExprKind::Struct(unit.items),
-            span: Span::dummy(),
-        });
-        self.infer_mod_expr(mexpr)
+        self.infer_items(unit.items)
+    }
+
+    fn infer_items(&mut self, items: &'hir Items<'hir>) -> Result<(), InferError<'hir>> {
+        log::trace!("{{");
+        log::block_in();
+        for (&id, value) in &items.values {
+            let typ = match value.typ {
+                Some(typ) => {
+                    self.check_expr(value.expr, typ)?;
+                    self.solve_current()?;
+                    typ
+                }
+                None => self.infer_solve_expr(value.expr)?,
+            };
+            log::trace!("{id} : {typ}");
+            self.hir_ctxt.set_type(value.path.res().hir_id(), typ);
+        }
+        for (id, mexpr) in &items.modules {
+            log::trace!("mod {id}");
+            self.infer_mod_expr(mexpr)?;
+        }
+        log::block_out();
+        log::trace!("}}");
+        Ok(())
     }
 
     fn infer_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) -> Result<(), InferError<'hir>> {
@@ -225,29 +245,7 @@ impl<'hir> TypeChecker<'hir> {
             ModExprKind::Path(_path) => {
                 todo!()
             }
-            ModExprKind::Struct(items) => {
-                log::trace!("{{");
-                log::block_in();
-                for (&id, value) in &items.values {
-                    let typ = match value.typ {
-                        Some(typ) => {
-                            self.check_expr(value.expr, typ)?;
-                            self.solve_current()?;
-                            typ
-                        }
-                        None => self.infer_solve_expr(value.expr)?,
-                    };
-                    log::trace!("{id} : {typ}");
-                    self.hir_ctxt.set_type(value.path.res().hir_id(), typ);
-                }
-                for (id, mexpr) in &items.modules {
-                    log::trace!("mod {id}");
-                    self.infer_mod_expr(mexpr)?;
-                }
-                log::block_out();
-                log::trace!("}}");
-                Ok(())
-            }
+            ModExprKind::Struct(items) => self.infer_items(items),
         }
     }
 
@@ -256,7 +254,7 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     fn infer_expr(&mut self, expr: &'hir Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        Ok(match expr.kind {
+        let typ = match expr.kind {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
@@ -340,7 +338,9 @@ impl<'hir> TypeChecker<'hir> {
                 self.constrain(then_typ, else_typ);
                 then_typ
             }
-        })
+        };
+        self.hir_ctxt.set_type(expr.hir_id, typ);
+        Ok(typ)
     }
 
     /// Infer the type of a lambda expression `(\args -> body)`.
@@ -393,7 +393,7 @@ impl<'hir> TypeChecker<'hir> {
 
     /// Infer a type for a pattern.
     fn infer_pat(&mut self, pat: &'hir Pat<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        Ok(match pat.kind {
+        let typ = match pat.kind {
             PatKind::Wild => self.fresh_var(),
             PatKind::Var(path) => {
                 let var = self.fresh_var();
@@ -420,7 +420,9 @@ impl<'hir> TypeChecker<'hir> {
                 }
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
-        })
+        };
+        self.hir_ctxt.set_type(pat.hir_id, typ);
+        Ok(typ)
     }
 
     fn infer_pats(&mut self, pats: &'hir [Pat<'hir>]) -> Result<Vec<Ty<'hir>>, InferError<'hir>> {

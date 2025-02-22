@@ -11,10 +11,8 @@
 // expired data, even if its type gives it the capability to do so.
 #![feature(dropck_eyepatch)]
 #![feature(array_windows)]
-#![feature(step_trait)]
 pub mod arena;
 pub mod bitset;
-pub mod graph;
 pub mod hash;
 pub mod index;
 pub mod pp;

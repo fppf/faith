@@ -69,10 +69,9 @@ pub enum TyKind<'hir> {
     Tuple(&'hir [Ty<'hir>]),
     /// Homogeneous vector.
     Vector(Ty<'hir>),
-
-    /// Extensible row type.
+    // Extensible row type.
     // TODO. unimplemented.
-    Row(&'hir [(Ident, Ty<'hir>)], Option<Ty<'hir>>),
+    //Row(&'hir [(Ident, Ty<'hir>)], Option<Ty<'hir>>),
 }
 
 base::newtype_index! {
@@ -277,12 +276,12 @@ impl<'hir> Ty<'hir> {
                 v.visit(t2);
             }
             TyKind::App(_, ts) | TyKind::Tuple(ts) => ts.iter().for_each(|&t| v.visit(t)),
-            TyKind::Row(fields, ext) => {
-                fields.iter().for_each(|&(_, t)| v.visit(t));
-                if let Some(t) = ext {
-                    v.visit(t);
-                }
-            }
+            // TyKind::Row(fields, ext) => {
+            //     fields.iter().for_each(|&(_, t)| v.visit(t));
+            //     if let Some(t) = ext {
+            //         v.visit(t);
+            //     }
+            // }
         }
     }
 
@@ -305,12 +304,12 @@ impl<'hir> Ty<'hir> {
                     .arena
                     .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
             ),
-            TyKind::Row(fields, ext) => TyKind::Row(
-                f.ctxt()
-                    .arena
-                    .alloc_from_iter(fields.iter().map(|&(l, t)| (l, f.fold(t)))),
-                ext.map(|t| f.fold(t)),
-            ),
+            // TyKind::Row(fields, ext) => TyKind::Row(
+            //     f.ctxt()
+            //         .arena
+            //         .alloc_from_iter(fields.iter().map(|&(l, t)| (l, f.fold(t)))),
+            //     ext.map(|t| f.fold(t)),
+            // ),
         };
         if *self.kind() == kind {
             self

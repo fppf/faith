@@ -9,7 +9,6 @@ use std::{
 use base::{
     hash::{Map, Set},
     index::IndexVec,
-    pp::FormatIterator,
 };
 use span::{
     Ident, SourceId, Sp, Span, Sym,
@@ -367,7 +366,6 @@ impl<'hir> LoweringContext<'hir> {
     fn current_value_path(&mut self, id: Ident) -> hir::Path<'hir> {
         let hir_id = self.hir_ctxt.new_hir_node();
         if let Some((&root, access)) = self.local_module_stack.split_first() {
-            log::trace!("{}.{}.{id} -> {hir_id}", root, access.iter().format("."));
             self.hir_ctxt.path(
                 root,
                 access.iter().copied().chain(std::iter::once(id)),
@@ -375,7 +373,6 @@ impl<'hir> LoweringContext<'hir> {
                 Res::Def(DefKind::Value, hir_id),
             )
         } else {
-            log::trace!("{id} -> {hir_id}");
             self.hir_ctxt
                 .path(id, [], id.span, Res::Def(DefKind::Value, hir_id))
         }

@@ -182,7 +182,6 @@ impl HirPrinter {
                 self.print_type(t, TypePrec::Top);
                 self.word("]");
             }
-            TyKind::Row(..) => todo!("print rows"),
             TyKind::App(h, ts) => {
                 prec.enclose(TypePrec::Arg, "(", ")", self, &(h, ts), |pp, (h, ts)| {
                     pp.print_path(*h);
