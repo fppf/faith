@@ -260,14 +260,11 @@ impl<'hir> TypeChecker<'hir> {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
-                fn split_app<'a>(expr: &'a Expr<'a>) -> (&'a Expr<'a>, &'a [Expr<'a>]) {
-                    match expr.kind {
-                        ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[]),
-                        ExprKind::Call(_, h, args) => (h, args),
-                        _ => unreachable!(),
-                    }
-                }
-                let (head, args) = split_app(expr);
+                let (head, args) = match expr.kind {
+                    ExprKind::Call(_, head, args) => (head, args),
+                    ExprKind::Path(_) | ExprKind::Constructor(..) => (expr, &[] as &[_]),
+                    _ => unreachable!(),
+                };
                 let head_typ = match head.kind {
                     ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
                     _ => self.infer_expr(head),
