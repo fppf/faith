@@ -1,42 +1,65 @@
 #![feature(never_type)]
 #![feature(let_chains)]
+#![allow(unused)]
 
 use base::hash::Map;
-use hir::*;
-use span::{Ident, Span, Sym, diag::Diagnostic};
+use resolve::{Res, ResId, Resolution};
+use span::{Ident, Sp, Span, Sym, diag::Diagnostic};
+use syntax::ast::*;
 
 mod constraint;
 mod substitution;
+mod typ;
 mod unify;
 
 pub mod error;
+pub mod resolve;
 
 use constraint::Constraint;
 use error::InferError;
 use substitution::Substitution;
-use unify::{UnificationTable, UnifyKey};
+use typ::{Folder, Skolem, SkolemId, Ty, TyKind, TypeVar};
 
-pub fn infer_program_in<'hir>(
-    hir_ctxt: &'hir HirCtxt<'hir>,
-    program: &'hir Program<'hir>,
+base::declare_arena!('t, []);
+
+pub struct TyCtxt<'t> {
+    pub arena: Arena<'t>,
+}
+
+impl Default for TyCtxt<'_> {
+    fn default() -> Self {
+        Self {
+            arena: Arena::default(),
+        }
+    }
+}
+
+impl<'t> TyCtxt<'t> {
+    pub fn typ(&'t self, kind: TyKind<'t>, span: Span) -> Ty<'t> {
+        Ty::new(self, kind, span)
+    }
+}
+
+pub fn infer_program_in<'ast, 't>(
+    ctxt: &'t TyCtxt<'t>,
+    program: &'ast Program<'ast>,
 ) -> Result<(), Diagnostic> {
-    TypeChecker::new(hir_ctxt, program)
+    let res = resolve::resolve_program_in(ctxt, program)?;
+    TypeChecker::new(ctxt, program, &res)
         .infer()
         .map_err(Diagnostic::from)
 }
 
-struct TypeChecker<'hir> {
-    hir_ctxt: &'hir HirCtxt<'hir>,
-    program: &'hir Program<'hir>,
+struct TypeChecker<'ast, 't> {
+    ctxt: &'t TyCtxt<'t>,
+    program: &'ast Program<'ast>,
+    env: Map<Res, Ty<'t>>,
+    res: &'t Resolution<'ast, 't>,
+
     type_var_src: TypeVarSource,
     skolem: SkolemId,
-    constraints: Vec<Constraint<'hir, Ty<'hir>>>,
-    subs: Substitution<'hir, Ty<'hir>>,
-    webs: UnificationTable<WebId>,
-}
-
-impl UnifyKey for WebId {
-    type Value = ();
+    constraints: Vec<Constraint<'t, Ty<'t>>>,
+    subs: Substitution<'t, Ty<'t>>,
 }
 
 #[derive(Default)]
@@ -49,7 +72,7 @@ impl TypeVarSource {
         self.char_count = 0;
     }
 
-    fn fresh(&mut self, _hir_id: HirId) -> TypeVar {
+    fn fresh(&mut self, _: ResId) -> TypeVar {
         let ch = (b'a' + self.char_count) as char;
         self.char_count = (self.char_count + 1) % (b'z' - b'a');
         let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
@@ -57,44 +80,47 @@ impl TypeVarSource {
     }
 }
 
-impl<'hir> TypeChecker<'hir> {
-    fn new(hir_ctxt: &'hir HirCtxt<'hir>, program: &'hir Program<'hir>) -> Self {
+impl<'ast, 't> TypeChecker<'ast, 't> {
+    fn new(
+        ctxt: &'t TyCtxt<'t>,
+        program: &'ast Program<'ast>,
+        res: &'t Resolution<'ast, 't>,
+    ) -> Self {
         Self {
-            hir_ctxt,
+            ctxt,
             program,
+            res,
+            env: Map::default(),
             type_var_src: TypeVarSource::default(),
             skolem: SkolemId::ZERO,
             constraints: Vec::new(),
-            subs: Substitution::new(hir_ctxt),
-            webs: UnificationTable::default(),
+            subs: Substitution::new(ctxt),
         }
     }
 
-    fn infer(mut self) -> Result<(), InferError<'hir>> {
+    fn infer(mut self) -> Result<(), InferError<'t>> {
         self.infer_comp_unit(self.program.unit)?;
-        let main_typ = self.infer_solve_expr(self.program.main)?;
-        log::trace!("main : {main_typ}");
-        assert!(self.hir_ctxt.is_ctxt_typed());
+        self.infer_solve_expr(self.program.main)?;
         Ok(())
     }
 
-    fn type_from_lit(&self, lit: hir::Lit, span: Span) -> Ty<'hir> {
-        self.hir_ctxt.typ(TyKind::Base(lit.base_type()), span)
+    fn type_from_lit(&self, lit: Lit, span: Span) -> Ty<'t> {
+        self.ctxt.typ(TyKind::Base(lit.base_type()), span)
     }
 
-    fn constrain(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) {
+    fn constrain(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) {
         //log::trace!("{lhs} ~ {rhs}");
         self.constraints.push(Constraint::equal(lhs, rhs));
     }
 
-    fn fresh_var(&self) -> Ty<'hir> {
+    fn fresh_var(&self) -> Ty<'t> {
         self.subs.new_var().1
     }
 
     /// Generalize a type over its unification variables.
     ///
     /// For example, `generalize('1 -> '1) = 'a -> 'a`.
-    fn generalize(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
+    fn generalize(&mut self, typ: Ty<'t>) -> Ty<'t> {
         self.type_var_src.reset();
         let typ = self.subs.apply(typ);
         let free_vars = typ.uni_vars();
@@ -102,7 +128,7 @@ impl<'hir> TypeChecker<'hir> {
             for var in free_vars {
                 self.subs.insert(
                     var.id,
-                    Ty::type_var(self.hir_ctxt, self.type_var_src.fresh(HirId::ZERO)),
+                    Ty::type_var(self.ctxt, self.type_var_src.fresh(ResId::ZERO /* FIXME */)),
                 );
             }
             self.subs.apply(typ)
@@ -111,14 +137,14 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn instantiate(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
+    fn instantiate(&mut self, typ: Ty<'t>) -> Ty<'t> {
         struct Instantiator<'a> {
-            ctxt: &'a HirCtxt<'a>,
+            ctxt: &'a TyCtxt<'a>,
             subs: Map<Ident, Ty<'a>>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for Instantiator<'a> {
-            fn ctxt(&self) -> &'a HirCtxt<'a> {
+            fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
@@ -134,7 +160,7 @@ impl<'hir> TypeChecker<'hir> {
         }
 
         Instantiator {
-            ctxt: self.hir_ctxt,
+            ctxt: self.ctxt,
             subs: typ
                 .type_vars()
                 .iter()
@@ -150,14 +176,14 @@ impl<'hir> TypeChecker<'hir> {
         id
     }
 
-    fn skolemize(&mut self, typ: Ty<'hir>) -> Ty<'hir> {
+    fn _skolemize(&mut self, typ: Ty<'t>) -> Ty<'t> {
         struct SkolemReplacer<'a> {
             skolems: Map<TypeVar, Skolem>,
-            ctxt: &'a HirCtxt<'a>,
+            ctxt: &'a TyCtxt<'a>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for SkolemReplacer<'a> {
-            fn ctxt(&self) -> &'a HirCtxt<'a> {
+            fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
@@ -177,17 +203,14 @@ impl<'hir> TypeChecker<'hir> {
             .collect();
 
         let skolemized = SkolemReplacer {
-            ctxt: self.hir_ctxt,
+            ctxt: self.ctxt,
             skolems,
         }
         .fold(typ);
-        if typ != skolemized {
-            log::trace!("skolemize ({typ}) => ({skolemized})");
-        }
         skolemized
     }
 
-    fn solve_current(&mut self) -> Result<(), InferError<'hir>> {
+    fn solve_current(&mut self) -> Result<(), InferError<'t>> {
         let constraints: Vec<_> = self.constraints.drain(..).collect();
         let residual = constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
         if residual.is_empty() {
@@ -197,44 +220,45 @@ impl<'hir> TypeChecker<'hir> {
         }
     }
 
-    fn infer_solve_expr(&mut self, expr: &'hir Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+    fn infer_solve_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let res = self.infer_expr(expr)?;
         self.solve_current()?;
         let res = self.generalize(res);
         Ok(res)
     }
 
-    fn infer_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) -> Result<(), InferError<'hir>> {
+    fn infer_comp_unit(&mut self, unit: &'ast CompUnit<'ast>) -> Result<(), InferError<'t>> {
         self.infer_items(unit.items)
     }
 
-    fn infer_items(&mut self, items: &'hir Items<'hir>) -> Result<(), InferError<'hir>> {
+    fn infer_items(&mut self, items: &'ast [Sp<Item<'ast>>]) -> Result<(), InferError<'t>> {
         log::trace!("{{");
         log::block_in();
-        for (&id, value) in &items.values {
-            let typ = match value.typ {
-                Some(typ) => {
-                    self.check_expr(value.expr, typ)?;
-                    self.solve_current()?;
-                    typ
-                }
-                None => self.infer_solve_expr(value.expr)?,
-            };
-            log::trace!("{id} : {typ}");
-            self.hir_ctxt.set_type(value.path.res().hir_id(), typ);
-        }
-        for (id, mexpr) in &items.modules {
-            log::trace!("mod {id}");
-            self.infer_mod_expr(mexpr)?;
-        }
+        //FIXME
+        // for (&id, value) in &items.values {
+        //     let typ = match value.typ {
+        //         Some(typ) => {
+        //             self.check_expr(value.expr, typ)?;
+        //             self.solve_current()?;
+        //             typ
+        //         }
+        //         None => self.infer_solve_expr(value.expr)?,
+        //     };
+        //     log::trace!("{id} : {typ}");
+        //     self.ctxt.set_type(value.path.res().hir_id(), typ);
+        // }
+        // for (id, mexpr) in &items.modules {
+        //     log::trace!("mod {id}");
+        //     self.infer_mod_expr(mexpr)?;
+        // }
         log::block_out();
         log::trace!("}}");
         Ok(())
     }
 
-    fn infer_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) -> Result<(), InferError<'hir>> {
-        match mexpr.kind {
-            ModExprKind::Import(source_id) => {
+    fn infer_mod_expr(&mut self, mexpr: &'ast Sp<ModExpr<'ast>>) -> Result<(), InferError<'t>> {
+        match mexpr.value {
+            ModExpr::Import(source_id) => {
                 let comp_unit = self
                     .program
                     .imports
@@ -242,24 +266,24 @@ impl<'hir> TypeChecker<'hir> {
                     .expect("HIR lowering produced an invalid source_id for an import");
                 self.infer_comp_unit(comp_unit)
             }
-            ModExprKind::Path(_path) => {
+            ModExpr::Path(_path) => {
                 todo!()
             }
-            ModExprKind::Struct(items) => self.infer_items(items),
+            ModExpr::Struct(items) => self.infer_items(items),
         }
     }
 
-    fn _infer_decl_group(&mut self, _group: TypeDeclGroup<'hir>) -> Result<(), InferError<'hir>> {
-        todo!()
-    }
+    // fn _infer_decl_group(&mut self, _group: TypeDeclGroup<'ast>) -> Result<(), InferError<'t>> {
+    //     todo!()
+    // }
 
-    fn infer_expr(&mut self, expr: &'hir Expr<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+    fn infer_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let typ = match expr.kind {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
                 let (head, args) = match expr.kind {
-                    ExprKind::Call(_, head, args) => (head, args),
+                    ExprKind::Call(head, args) => (head, args),
                     ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[] as &[_]),
                     _ => unreachable!(),
                 };
@@ -269,7 +293,7 @@ impl<'hir> TypeChecker<'hir> {
                 }?;
                 let mut typ = self.instantiate(head_typ);
                 for arg in args {
-                    if let TyKind::Arrow(_, arg_typ, ret_typ) = *typ.kind() {
+                    if let TyKind::Arrow(arg_typ, ret_typ) = *typ.kind() {
                         self.check_expr(arg, arg_typ)?;
                         typ = ret_typ;
                     } else {
@@ -278,7 +302,7 @@ impl<'hir> TypeChecker<'hir> {
                 }
                 typ
             }
-            ExprKind::External(_, typ) => typ,
+            ExprKind::External(_) => unreachable!(),
             ExprKind::Lit(l) => self.type_from_lit(l, expr.span),
             ExprKind::Lambda(lambda) => self.infer_lambda(lambda.args, lambda.body)?,
             ExprKind::Let(binds, body) => {
@@ -290,15 +314,16 @@ impl<'hir> TypeChecker<'hir> {
                 self.infer_expr(body)?
             }
             ExprKind::Ann(expr, typ) => {
-                self.check_expr(expr, typ)?;
-                typ
+                //FIXME self.check_expr(expr, typ)?;
+                //typ
+                todo!()
             }
             ExprKind::Tuple(elems) => {
                 let mut typs = Vec::with_capacity(elems.len());
                 for elem in elems {
                     typs.push(self.infer_expr(elem)?);
                 }
-                Ty::tuple(self.hir_ctxt, typs, expr.span)
+                Ty::tuple(self.ctxt, typs, expr.span)
             }
             ExprKind::Vector(elems) => {
                 let base_typ = self.fresh_var();
@@ -306,13 +331,12 @@ impl<'hir> TypeChecker<'hir> {
                     let elem_typ = self.infer_expr(elem)?;
                     self.constrain(base_typ, elem_typ);
                 }
-                self.hir_ctxt.typ(TyKind::Vector(base_typ), expr.span)
+                self.ctxt.typ(TyKind::Vector(base_typ), expr.span)
             }
             ExprKind::Seq(e1, e2) => {
                 self.check_expr(
                     e1,
-                    self.hir_ctxt
-                        .typ(TyKind::Base(BaseType::Unit), Span::dummy()),
+                    self.ctxt.typ(TyKind::Base(BaseType::Unit), Span::dummy()),
                 )?;
                 self.infer_expr(e2)?
             }
@@ -330,8 +354,7 @@ impl<'hir> TypeChecker<'hir> {
             ExprKind::If(cond, then_expr, else_expr) => {
                 self.check_expr(
                     cond,
-                    self.hir_ctxt
-                        .typ(TyKind::Base(BaseType::Bool), Span::dummy()),
+                    self.ctxt.typ(TyKind::Base(BaseType::Bool), Span::dummy()),
                 )?;
                 let then_typ = self.infer_expr(then_expr)?;
                 let else_typ = self.infer_expr(else_expr)?;
@@ -339,38 +362,39 @@ impl<'hir> TypeChecker<'hir> {
                 then_typ
             }
         };
-        self.hir_ctxt.set_type(expr.hir_id, typ);
+        let res = self.res[expr.ast_id];
+        self.env.insert(res, typ);
         Ok(typ)
     }
 
     /// Infer the type of a lambda expression `(\args -> body)`.
     fn infer_lambda(
         &mut self,
-        args: &'hir [Pat<'hir>],
-        body: &'hir Expr<'hir>,
-    ) -> Result<Ty<'hir>, InferError<'hir>> {
+        args: &'ast [Pat<'ast>],
+        body: &'ast Expr<'ast>,
+    ) -> Result<Ty<'t>, InferError<'t>> {
         if let Some((first, rest)) = args.split_first() {
             let arg_typ = self.infer_pat(first)?;
             let ret_typ = self.infer_lambda(rest, body)?;
-            Ok(Ty::arrow(self.hir_ctxt, NO_WEB, arg_typ, ret_typ))
+            Ok(Ty::arrow(self.ctxt, arg_typ, ret_typ))
         } else {
             self.infer_expr(body)
         }
     }
 
     /// Infer the type of a path by looking it up in the environment.
-    fn infer_path(&mut self, path: Path<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
-        let hir_id = path.res().hir_id();
-        Ok(match self.hir_ctxt.get_type(hir_id) {
-            Some(typ) => typ,
+    fn infer_path(&mut self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
+        let res = self.res[path.ast_id];
+        Ok(match self.env.get(&res) {
+            Some(typ) => *typ,
             None => {
-                let typ = if let Some(cons) = self.program.constructors.get(&hir_id) {
+                let typ = if let Some(cons) = self.res.constructors.get(&res) {
                     cons.typ
                 } else {
                     let value = self
-                        .program
+                        .res
                         .values
-                        .get(&hir_id)
+                        .get(&res)
                         .unwrap_or_else(|| panic!("ICE: expected '{path}' to be lowered"));
 
                     if value.recursive {
@@ -385,27 +409,29 @@ impl<'hir> TypeChecker<'hir> {
                         }
                     }
                 };
-                self.hir_ctxt.set_type(hir_id, typ);
+                self.env.insert(res, typ);
                 typ
             }
         })
     }
 
     /// Infer a type for a pattern.
-    fn infer_pat(&mut self, pat: &'hir Pat<'hir>) -> Result<Ty<'hir>, InferError<'hir>> {
+    fn infer_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let typ = match pat.kind {
             PatKind::Wild => self.fresh_var(),
-            PatKind::Var(path) => {
+            PatKind::Var(id) => {
                 let var = self.fresh_var();
-                self.hir_ctxt.set_type(path.res().hir_id(), var);
+                let res = self.res[id.ast_id];
+                self.env.insert(res, var);
                 var
             }
             PatKind::Lit(l) => self.type_from_lit(l, pat.span),
             PatKind::Ann(pat, typ) => {
-                self.check_pat(pat, typ)?;
-                typ
+                //FIXME self.check_pat(pat, typ)?;
+                //typ
+                todo!()
             }
-            PatKind::Tuple(pats) => Ty::tuple(self.hir_ctxt, self.infer_pats(pats)?, pat.span),
+            PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?, pat.span),
             PatKind::Constructor(cons, args) => {
                 // TODO. well-formed check for cons_t
                 let cons_typ = self.infer_path(cons)?;
@@ -415,17 +441,18 @@ impl<'hir> TypeChecker<'hir> {
                     let arg_typs = self.infer_pats(args)?;
                     let ret_typ = self.fresh_var();
                     let cons_typ = self.instantiate(cons_typ);
-                    self.constrain(Ty::n_arrow(self.hir_ctxt, arg_typs, ret_typ), cons_typ);
+                    self.constrain(Ty::n_arrow(self.ctxt, arg_typs, ret_typ), cons_typ);
                     ret_typ
                 }
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
         };
-        self.hir_ctxt.set_type(pat.hir_id, typ);
+        let res = self.res[pat.ast_id];
+        self.env.insert(res, typ);
         Ok(typ)
     }
 
-    fn infer_pats(&mut self, pats: &'hir [Pat<'hir>]) -> Result<Vec<Ty<'hir>>, InferError<'hir>> {
+    fn infer_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<Vec<Ty<'t>>, InferError<'t>> {
         let mut typs = Vec::with_capacity(pats.len());
         for pat in pats {
             typs.push(self.infer_pat(pat)?);
@@ -436,11 +463,12 @@ impl<'hir> TypeChecker<'hir> {
     /// Check an expression against a type.
     fn check_expr(
         &mut self,
-        expr: &'hir Expr<'hir>,
-        expected: Ty<'hir>,
-    ) -> Result<(), InferError<'hir>> {
+        expr: &'ast Expr<'ast>,
+        expected: Ty<'t>,
+    ) -> Result<(), InferError<'t>> {
         //let expected = self.skolemize(expected);
         match (expr.kind, expected.kind()) {
+            (ExprKind::External(_), _) => (),
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (ExprKind::Lit(l), TyKind::Var(_)) => {
                 self.constrain(expected, self.type_from_lit(l, expr.span));
@@ -451,7 +479,7 @@ impl<'hir> TypeChecker<'hir> {
                 let mut arg_typs = Vec::with_capacity(lambda.args.len());
                 let ret_typ =
                     self.check_lambda_var(lambda.args, lambda.body, expected, &mut arg_typs)?;
-                self.constrain(expected, Ty::n_arrow(self.hir_ctxt, arg_typs, ret_typ));
+                self.constrain(expected, Ty::n_arrow(self.ctxt, arg_typs, ret_typ));
             }
             (ExprKind::Lambda(lambda), TyKind::Arrow(..)) => {
                 self.check_lambda_arrow(lambda.args, lambda.body, expected)?
@@ -485,11 +513,11 @@ impl<'hir> TypeChecker<'hir> {
 
     fn check_lambda_var(
         &mut self,
-        args: &'hir [Pat<'hir>],
-        body: &'hir Expr<'hir>,
-        var: Ty<'hir>,
-        arg_typs: &mut Vec<Ty<'hir>>,
-    ) -> Result<Ty<'hir>, InferError<'hir>> {
+        args: &'ast [Pat<'ast>],
+        body: &'ast Expr<'ast>,
+        var: Ty<'t>,
+        arg_typs: &mut Vec<Ty<'t>>,
+    ) -> Result<Ty<'t>, InferError<'t>> {
         if let Some((first, rest)) = args.split_first() {
             let typ = self.infer_pat(first)?;
             arg_typs.push(typ);
@@ -503,13 +531,13 @@ impl<'hir> TypeChecker<'hir> {
     /// Check a lambda expression `(\args -> body)` against an arrow type.
     fn check_lambda_arrow(
         &mut self,
-        args: &'hir [Pat<'hir>],
-        body: &'hir Expr<'hir>,
-        arrow: Ty<'hir>,
-    ) -> Result<(), InferError<'hir>> {
+        args: &'ast [Pat<'ast>],
+        body: &'ast Expr<'ast>,
+        arrow: Ty<'t>,
+    ) -> Result<(), InferError<'t>> {
         if let Some((first, rest)) = args.split_first() {
             match *arrow.kind() {
-                TyKind::Arrow(_, arg, ret) => {
+                TyKind::Arrow(arg, ret) => {
                     self.check_pat(first, arg)?;
                     self.check_lambda_arrow(rest, body, ret)
                 }
@@ -522,15 +550,12 @@ impl<'hir> TypeChecker<'hir> {
     }
 
     /// Check a pattern against a type.
-    fn check_pat(
-        &mut self,
-        pat: &'hir Pat<'hir>,
-        expected: Ty<'hir>,
-    ) -> Result<(), InferError<'hir>> {
+    fn check_pat(&mut self, pat: &'ast Pat<'ast>, expected: Ty<'t>) -> Result<(), InferError<'t>> {
         match (pat.kind, expected.kind()) {
             (PatKind::Wild, _) => (),
             (PatKind::Var(path), _) => {
-                self.hir_ctxt.set_type(path.res().hir_id(), expected);
+                let res = self.res[path.ast_id];
+                self.env.insert(res, expected);
             }
             (PatKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {

@@ -3,17 +3,17 @@ use std::{fmt, hash::Hash};
 use base::{
     arena::Interned,
     hash::{IndexSet, Map, Set},
-    index::Idx,
+    pp::FormatIterator,
 };
 use span::{Ident, Span};
 
-use crate::{HirCtxt, NO_WEB, Path, WebId};
+use crate::{TyCtxt, resolve::Res, substitution::Substitutable};
 
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
 //       don't allow Ty::new(..), make it a method on a ctx.
 #[derive(Clone, Copy, Debug)]
-pub struct Ty<'hir>(Interned<'hir, TyKind<'hir>>, Span);
+pub struct Ty<'t>(Interned<'t, TyKind<'t>>, Span);
 
 impl PartialEq for Ty<'_> {
     fn eq(&self, other: &Self) -> bool {
@@ -32,12 +32,12 @@ impl Hash for Ty<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::{BaseType, HirCtxt, TyKind};
+    use crate::{BaseType, TyCtxt, typ::TyKind};
     use span::Span;
 
     #[test]
     fn equality() {
-        let ctxt = HirCtxt::default();
+        let ctxt = TyCtxt::default();
         let t1 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(0..1));
         let t2 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(1..2));
         assert_eq!(t1, t2);
@@ -45,9 +45,9 @@ mod test {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TyKind<'hir> {
+pub enum TyKind<'t> {
     /// A base/builtin type.
-    Base(BaseType),
+    Base(syntax::ast::BaseType),
 
     /// Represents a unification type variable.
     /// For a successfully inferred program, these should all
@@ -61,17 +61,14 @@ pub enum TyKind<'hir> {
 
     /// Type represented by a path to a type declaration,
     /// with zero or more arguments.
-    App(Path<'hir>, &'hir [Ty<'hir>]),
+    App(Res, &'t [Ty<'t>]),
 
     /// Arrow type `a -> b`.
-    Arrow(WebId, Ty<'hir>, Ty<'hir>),
+    Arrow(Ty<'t>, Ty<'t>),
     /// Product of types.
-    Tuple(&'hir [Ty<'hir>]),
+    Tuple(&'t [Ty<'t>]),
     /// Homogeneous vector.
-    Vector(Ty<'hir>),
-    // Extensible row type.
-    // TODO. unimplemented.
-    //Row(&'hir [(Ident, Ty<'hir>)], Option<Ty<'hir>>),
+    Vector(Ty<'t>),
 }
 
 base::newtype_index! {
@@ -89,26 +86,6 @@ base::newtype_index! {
 impl fmt::Display for UniVarId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "'{}", self.index())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum BaseType {
-    Unit,
-    Bool,
-    Int32,
-    Str,
-}
-
-impl fmt::Display for BaseType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unit => "()",
-            Self::Bool => "bool",
-            Self::Int32 => "i32",
-            Self::Str => "str",
-        }
-        .fmt(f)
     }
 }
 
@@ -226,36 +203,20 @@ pub trait Visitor<T>: Sized {
     fn visit(&mut self, t: T);
 }
 
-pub trait Folder<'hir, T>: Sized {
-    fn ctxt(&self) -> &'hir HirCtxt<'hir>;
+pub trait Folder<'t, T>: Sized {
+    fn ctxt(&self) -> &'t TyCtxt<'t>;
 
     fn fold(&mut self, t: T) -> T;
 }
 
-pub trait Substitutable<'hir>: Copy + PartialEq + fmt::Display {
-    type Var: Idx + fmt::Display;
-
-    fn as_var(&self) -> Option<Self::Var>;
-
-    fn make_var(ctxt: &'hir HirCtxt<'hir>, var: Self::Var) -> Self;
-
-    fn visit_with<V>(&self, v: &mut V)
-    where
-        V: Visitor<Self>;
-
-    fn fold_with<F>(self, f: &mut F) -> Self
-    where
-        F: Folder<'hir, Self>;
-}
-
-impl<'hir> Ty<'hir> {
+impl<'t> Ty<'t> {
     #[inline]
-    pub fn new(ctxt: &'hir HirCtxt<'hir>, kind: TyKind<'hir>, span: Span) -> Self {
+    pub fn new(ctxt: &'t TyCtxt<'t>, kind: TyKind<'t>, span: Span) -> Ty<'t> {
         Ty(Interned::new_unchecked(ctxt.arena.alloc(kind)), span)
     }
 
     #[inline]
-    pub fn kind(self) -> &'hir TyKind<'hir> {
+    pub fn kind(self) -> &'t TyKind<'t> {
         (self.0).0
     }
 
@@ -271,23 +232,17 @@ impl<'hir> Ty<'hir> {
         match *self.kind() {
             TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => (),
             TyKind::Vector(t) => v.visit(t),
-            TyKind::Arrow(_, t1, t2) => {
+            TyKind::Arrow(t1, t2) => {
                 v.visit(t1);
                 v.visit(t2);
             }
             TyKind::App(_, ts) | TyKind::Tuple(ts) => ts.iter().for_each(|&t| v.visit(t)),
-            // TyKind::Row(fields, ext) => {
-            //     fields.iter().for_each(|&(_, t)| v.visit(t));
-            //     if let Some(t) = ext {
-            //         v.visit(t);
-            //     }
-            // }
         }
     }
 
     pub fn fold_with<F>(self, f: &mut F) -> Self
     where
-        F: Folder<'hir, Self>,
+        F: Folder<'t, Self>,
     {
         let kind = match *self.kind() {
             TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => return self,
@@ -298,18 +253,12 @@ impl<'hir> Ty<'hir> {
                     .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
             ),
             TyKind::Vector(t) => TyKind::Vector(f.fold(t)),
-            TyKind::Arrow(u, t1, t2) => TyKind::Arrow(u, f.fold(t1), f.fold(t2)),
+            TyKind::Arrow(t1, t2) => TyKind::Arrow(f.fold(t1), f.fold(t2)),
             TyKind::Tuple(ts) => TyKind::Tuple(
                 f.ctxt()
                     .arena
                     .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
             ),
-            // TyKind::Row(fields, ext) => TyKind::Row(
-            //     f.ctxt()
-            //         .arena
-            //         .alloc_from_iter(fields.iter().map(|&(l, t)| (l, f.fold(t)))),
-            //     ext.map(|t| f.fold(t)),
-            // ),
         };
         if *self.kind() == kind {
             self
@@ -318,28 +267,28 @@ impl<'hir> Ty<'hir> {
         }
     }
 
-    pub fn tuple<I>(ctxt: &'hir HirCtxt<'hir>, iter: I, span: Span) -> Self
+    pub fn tuple<I>(ctxt: &'t TyCtxt<'t>, iter: I, span: Span) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
         ctxt.typ(TyKind::Tuple(ctxt.arena.alloc_from_iter(iter)), span)
     }
 
-    pub fn app<I>(ctxt: &'hir HirCtxt<'hir>, head: Path<'hir>, args: I, span: Span) -> Self
+    pub fn app<I>(ctxt: &'t TyCtxt<'t>, head: Res, args: I, span: Span) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
         ctxt.typ(TyKind::App(head, ctxt.arena.alloc_from_iter(args)), span)
     }
 
-    pub fn arrow(ctxt: &'hir HirCtxt<'hir>, web_id: WebId, source: Self, target: Self) -> Self {
+    pub fn arrow(ctxt: &'t TyCtxt<'t>, source: Self, target: Self) -> Self {
         ctxt.typ(
-            TyKind::Arrow(web_id, source, target),
+            TyKind::Arrow(source, target),
             source.span().merge(target.span()),
         )
     }
 
-    pub fn n_arrow<I>(ctxt: &'hir HirCtxt<'hir>, sources: I, target: Self) -> Self
+    pub fn n_arrow<I>(ctxt: &'t TyCtxt<'t>, sources: I, target: Self) -> Self
     where
         I: IntoIterator<Item = Self>,
         I::IntoIter: DoubleEndedIterator,
@@ -347,22 +296,22 @@ impl<'hir> Ty<'hir> {
         sources
             .into_iter()
             .rev()
-            .fold(target, |acc, source| Ty::arrow(ctxt, NO_WEB, source, acc))
+            .fold(target, |acc, source| Ty::arrow(ctxt, source, acc))
     }
 
-    pub fn path(ctxt: &'hir HirCtxt<'hir>, path: Path<'hir>) -> Self {
-        ctxt.typ(TyKind::App(path, &[]), path.span())
+    pub fn path(ctxt: &'t TyCtxt<'t>, res: Res, span: Span) -> Self {
+        ctxt.typ(TyKind::App(res, &[]), span)
     }
 
-    pub fn type_var(ctxt: &'hir HirCtxt<'hir>, var: TypeVar) -> Self {
+    pub fn type_var(ctxt: &'t TyCtxt<'t>, var: TypeVar) -> Self {
         ctxt.typ(TyKind::Var(var), var.name.span)
     }
 
-    pub fn uni_var(ctxt: &'hir HirCtxt<'hir>, var: UniVar) -> Self {
+    pub fn uni_var(ctxt: &'t TyCtxt<'t>, var: UniVar) -> Self {
         ctxt.typ(TyKind::Uni(var), Span::dummy())
     }
 
-    pub fn skolem(ctxt: &'hir HirCtxt<'hir>, skolem: Skolem) -> Self {
+    pub fn skolem(ctxt: &'t TyCtxt<'t>, skolem: Skolem) -> Self {
         ctxt.typ(TyKind::Skolem(skolem), skolem.name.span)
     }
 
@@ -390,7 +339,7 @@ impl<'hir> Ty<'hir> {
                         true
                     }
                 },
-                (TyKind::Arrow(_, l1, l2), TyKind::Arrow(_, r1, r2)) => {
+                (TyKind::Arrow(l1, l2), TyKind::Arrow(r1, r2)) => {
                     go(map, l1, r1) && go(map, l2, r2)
                 }
                 (TyKind::Vector(l), TyKind::Vector(r)) => go(map, l, r),
@@ -410,8 +359,8 @@ impl<'hir> Ty<'hir> {
             acc: IndexSet<UniVar>,
         }
 
-        impl<'hir> Visitor<Ty<'hir>> for Vars {
-            fn visit(&mut self, typ: Ty<'hir>) {
+        impl<'t> Visitor<Ty<'t>> for Vars {
+            fn visit(&mut self, typ: Ty<'t>) {
                 if let TyKind::Uni(var) = typ.kind() {
                     self.acc.insert(*var);
                 }
@@ -430,8 +379,8 @@ impl<'hir> Ty<'hir> {
             acc: Set<TypeVar>,
         }
 
-        impl<'hir> Visitor<Ty<'hir>> for Vars {
-            fn visit(&mut self, typ: Ty<'hir>) {
+        impl<'t> Visitor<Ty<'t>> for Vars {
+            fn visit(&mut self, typ: Ty<'t>) {
                 if let TyKind::Var(var) = typ.kind() {
                     self.acc.insert(*var);
                 }
@@ -444,15 +393,15 @@ impl<'hir> Ty<'hir> {
         vars.acc
     }
 
-    pub fn subst_uni_var(self, ctxt: &'hir HirCtxt<'hir>, var: UniVar, typ: Self) -> Self {
+    pub fn subst_uni_var(self, ctxt: &'t TyCtxt<'t>, var: UniVar, typ: Self) -> Self {
         struct Subs<'a> {
-            ctxt: &'a HirCtxt<'a>,
+            ctxt: &'a TyCtxt<'a>,
             var: UniVar,
             typ: Ty<'a>,
         }
 
         impl<'a> Folder<'a, Ty<'a>> for Subs<'a> {
-            fn ctxt(&self) -> &'a HirCtxt<'a> {
+            fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
@@ -471,7 +420,7 @@ impl<'hir> Ty<'hir> {
     }
 }
 
-impl<'hir> Substitutable<'hir> for Ty<'hir> {
+impl<'t> Substitutable<'t> for Ty<'t> {
     type Var = UniVarId;
 
     fn as_var(&self) -> Option<Self::Var> {
@@ -481,7 +430,7 @@ impl<'hir> Substitutable<'hir> for Ty<'hir> {
         }
     }
 
-    fn make_var(ctxt: &'hir HirCtxt<'hir>, var: Self::Var) -> Self {
+    fn make_var(ctxt: &'t TyCtxt<'t>, var: Self::Var) -> Self {
         Ty::uni_var(ctxt, UniVar::new(var, Kind::new(0)))
     }
 
@@ -494,8 +443,23 @@ impl<'hir> Substitutable<'hir> for Ty<'hir> {
 
     fn fold_with<F>(self, f: &mut F) -> Self
     where
-        F: Folder<'hir, Self>,
+        F: Folder<'t, Self>,
     {
         self.fold_with(f)
+    }
+}
+
+impl fmt::Display for Ty<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind() {
+            TyKind::Base(b) => b.fmt(f),
+            TyKind::Uni(u) => u.fmt(f),
+            TyKind::Var(v) => v.fmt(f),
+            TyKind::Skolem(s) => s.fmt(f),
+            TyKind::App(r, ts) => write!(f, "({r} {})", ts.iter().format(" ")),
+            TyKind::Arrow(t1, t2) => write!(f, "({t1} -> {t2})"),
+            TyKind::Tuple(ts) => write!(f, "({})", ts.iter().format(" ")),
+            TyKind::Vector(t) => write!(f, "[{}]", t),
+        }
     }
 }

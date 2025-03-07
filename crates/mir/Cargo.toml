@@ -9,4 +9,3 @@ base = { path = "../base" }
 span = { path = "../span" }
 infer = { path = "../infer" }
 log = { path = "../log" }
-hir = { path = "../hir" }

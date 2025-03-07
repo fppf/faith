@@ -9,9 +9,12 @@ use base::{
     index::{Idx, IndexVec},
     pp::FormatIterator,
 };
-use hir::{Folder, HirCtxt, Substitutable, Visitor};
 
-use crate::unify::{UnificationTable, UnifyKey, UnifyValue};
+use crate::{
+    typ::{Folder, Visitor},
+    unify::{UnificationTable, UnifyKey, UnifyValue},
+    TyCtxt,
+};
 
 base::newtype_index! {
     #[derive(PartialOrd, Ord)]
@@ -49,9 +52,25 @@ impl UnifyValue for Level {
     }
 }
 
-pub struct Substitution<'hir, T: Substitutable<'hir>> {
-    inner: RefCell<SubstitutionInner<'hir, T>>,
-    pub ctxt: &'hir HirCtxt<'hir>,
+pub trait Substitutable<'t>: Copy + PartialEq + fmt::Display {
+    type Var: Idx + fmt::Display;
+
+    fn as_var(&self) -> Option<Self::Var>;
+
+    fn make_var(ctxt: &'t TyCtxt<'t>, var: Self::Var) -> Self;
+
+    fn visit_with<V>(&self, v: &mut V)
+    where
+        V: Visitor<Self>;
+
+    fn fold_with<F>(self, f: &mut F) -> Self
+    where
+        F: Folder<'t, Self>;
+}
+
+pub struct Substitution<'t, T: Substitutable<'t>> {
+    inner: RefCell<SubstitutionInner<'t, T>>,
+    pub ctxt: &'t TyCtxt<'t>,
 }
 
 struct SubstitutionInner<'hir, T: Substitutable<'hir>> {
@@ -63,7 +82,7 @@ struct SubstitutionInner<'hir, T: Substitutable<'hir>> {
     types: Map<T::Var, OnceCell<T>>,
 }
 
-impl<'hir, T: Substitutable<'hir>> fmt::Display for Substitution<'hir, T> {
+impl<'t, T: Substitutable<'t>> fmt::Display for Substitution<'t, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -82,8 +101,8 @@ impl<'hir, T: Substitutable<'hir>> fmt::Display for Substitution<'hir, T> {
     }
 }
 
-impl<'hir, T: Substitutable<'hir>> Substitution<'hir, T> {
-    pub fn new(ctxt: &'hir HirCtxt<'hir>) -> Self {
+impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
+    pub fn new(ctxt: &'t TyCtxt<'t>) -> Self {
         Self {
             inner: RefCell::new(SubstitutionInner {
                 union: UnificationTable::default(),
@@ -169,12 +188,12 @@ impl<'hir, T: Substitutable<'hir>> Substitution<'hir, T> {
     }
 
     fn apply_once(&self, t: T) -> T {
-        struct Applier<'a, 'hir, T: Substitutable<'hir>> {
-            subs: &'a Substitution<'hir, T>,
+        struct Applier<'a, 't, T: Substitutable<'t>> {
+            subs: &'a Substitution<'t, T>,
         }
 
-        impl<'hir, T: Substitutable<'hir>> Folder<'hir, T> for Applier<'_, 'hir, T> {
-            fn ctxt(&self) -> &'hir HirCtxt<'hir> {
+        impl<'t, T: Substitutable<'t>> Folder<'t, T> for Applier<'_, 't, T> {
+            fn ctxt(&self) -> &'t TyCtxt<'t> {
                 self.subs.ctxt
             }
 

@@ -22,3 +22,15 @@ impl fmt::Display for Lit {
         }
     }
 }
+
+impl fmt::Display for BaseType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BaseType::Unit => "()",
+            BaseType::Bool => "bool",
+            BaseType::Str => "str",
+            BaseType::Int32 => "i32",
+        }
+        .fmt(f)
+    }
+}

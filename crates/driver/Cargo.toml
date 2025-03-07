@@ -7,6 +7,5 @@ edition = "2024"
 log = { path = "../log" }
 base = { path = "../base" }
 span = { path = "../span" }
-hir = { path = "../hir" }
-mir = { path = "../mir" }
+syntax = { path = "../syntax" }
 infer = { path = "../infer" }

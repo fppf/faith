@@ -1,9 +1,14 @@
 use std::{fmt, hash::Hash, marker::PhantomData};
 
 use base::hash::IndexSet;
-use hir::*;
+use span::Span;
 
-use crate::{TypeChecker, error::TypeUnifyError, substitution::Substitution};
+use crate::{
+    TypeChecker,
+    error::TypeUnifyError,
+    substitution::{Substitutable, Substitution},
+    typ::{Ty, TyKind},
+};
 
 pub fn solve<'a, T, U>(
     unifier: &mut U,
@@ -24,23 +29,23 @@ where
 
 /// Equality constraint (t1 ~ t2).
 ///
-/// Why all the generics? Really, we can just specialize to Type<'hir>.
+/// Why all the generics? Really, we can just specialize to Ty<'t>.
 /// I originally also wanted to reuse all this for kind inference, but
 /// I ended up going with a simpler kind system that doesn't require it.
 /// Anyways, I think making it a little abstract helps with keeping the
 /// logic clean (debatable, but eh). Could degenerify it later.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
-pub struct Constraint<'hir, T> {
+pub struct Constraint<'t, T> {
     pub lhs: T,
     pub rhs: T,
-    _marker: PhantomData<&'hir ()>,
+    _marker: PhantomData<&'t ()>,
 }
 
-pub trait Constrainable<'hir>: std::hash::Hash + Substitutable<'hir> {
+pub trait Constrainable<'t>: std::hash::Hash + Substitutable<'t> {
     fn canonicalize(
-        subs: &Substitution<'hir, Self>,
-        ct: Constraint<'hir, Self>,
-    ) -> Vec<Constraint<'hir, Self>> {
+        subs: &Substitution<'t, Self>,
+        ct: Constraint<'t, Self>,
+    ) -> Vec<Constraint<'t, Self>> {
         if ct.lhs == ct.rhs {
             // Discharge trivial equalities.
             Vec::new()
@@ -50,29 +55,29 @@ pub trait Constrainable<'hir>: std::hash::Hash + Substitutable<'hir> {
     }
 
     fn canonicalize_equal(
-        subs: &Substitution<'hir, Self>,
+        subs: &Substitution<'t, Self>,
         lhs: Self,
         rhs: Self,
-    ) -> Vec<Constraint<'hir, Self>>;
+    ) -> Vec<Constraint<'t, Self>>;
 
     fn interact(
-        subs: &Substitution<'hir, Self>,
-        this: Constraint<'hir, Self>,
-        other: Constraint<'hir, Self>,
-    ) -> Option<Constraint<'hir, Self>> {
+        subs: &Substitution<'t, Self>,
+        this: Constraint<'t, Self>,
+        other: Constraint<'t, Self>,
+    ) -> Option<Constraint<'t, Self>> {
         Self::interact_equal(subs, this.lhs, this.rhs, other.lhs, other.rhs)
     }
 
     fn interact_equal(
-        subs: &Substitution<'hir, Self>,
+        subs: &Substitution<'t, Self>,
         l1: Self,
         r1: Self,
         l2: Self,
         r2: Self,
-    ) -> Option<Constraint<'hir, Self>>;
+    ) -> Option<Constraint<'t, Self>>;
 }
 
-impl<'hir, T> Eq for Constraint<'hir, T> where T: Constrainable<'hir> {}
+impl<'t, T> Eq for Constraint<'t, T> where T: Constrainable<'t> {}
 /*
 impl<'hir, T> PartialEq for Constraint<'hir, T>
 where
@@ -395,32 +400,25 @@ where
     }
 }
 
-impl<'hir> Unifier<'hir, Ty<'hir>> for TypeChecker<'hir> {
-    type Error = TypeUnifyError<'hir>;
+impl<'t> Unifier<'t, Ty<'t>> for TypeChecker<'_, 't> {
+    type Error = TypeUnifyError<'t>;
 
-    fn subs(&self) -> &Substitution<'hir, Ty<'hir>> {
+    fn subs(&self) -> &Substitution<'t, Ty<'t>> {
         &self.subs
     }
 
-    fn unify_inside(&mut self, lhs: Ty<'hir>, rhs: Ty<'hir>) -> Result<(), Self::Error> {
+    fn unify_inside(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), Self::Error> {
         log::trace!("unify_inside {lhs} ~ {rhs}");
         match (*lhs.kind(), *rhs.kind()) {
             (lhs, rhs) if lhs == rhs => Ok(()),
-            (TyKind::Arrow(l_u, l_arg, l_ret), TyKind::Arrow(r_u, r_arg, r_ret)) => {
-                self.webs.unify_var_var(l_u, r_u).unwrap();
+            (TyKind::Arrow(l_arg, l_ret), TyKind::Arrow(r_arg, r_ret)) => {
                 self.try_unify(l_arg, r_arg)?;
                 self.try_unify(l_ret, r_ret)
             }
             (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
-                let l_h = self
-                    .hir_ctxt
-                    .get_type(l_h.res().hir_id())
-                    .ok_or(TypeUnifyError::Lookup(l_h))?;
-                let r_h = self
-                    .hir_ctxt
-                    .get_type(r_h.res().hir_id())
-                    .ok_or(TypeUnifyError::Lookup(r_h))?;
-                self.try_unify(l_h, r_h)?;
+                let l_h = self.env.get(&l_h).ok_or(TypeUnifyError::Lookup(l_h))?;
+                let r_h = self.env.get(&r_h).ok_or(TypeUnifyError::Lookup(r_h))?;
+                self.try_unify(*l_h, *r_h)?;
                 self.zip_unify(l_args, r_args)
             }
             (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
@@ -430,15 +428,15 @@ impl<'hir> Unifier<'hir, Ty<'hir>> for TypeChecker<'hir> {
     }
 }
 
-impl<'hir> Constrainable<'hir> for Ty<'hir> {
+impl<'t> Constrainable<'t> for Ty<'t> {
     fn canonicalize_equal(
-        subs: &Substitution<'hir, Ty<'hir>>,
-        lhs: Ty<'hir>,
-        rhs: Ty<'hir>,
-    ) -> Vec<Constraint<'hir, Ty<'hir>>> {
+        subs: &Substitution<'t, Ty<'t>>,
+        lhs: Ty<'t>,
+        rhs: Ty<'t>,
+    ) -> Vec<Constraint<'t, Ty<'t>>> {
         match (*lhs.kind(), *rhs.kind()) {
             // Deconstruct arrows (and other matching type constructors).
-            (TyKind::Arrow(_, l_arg, l_ret), TyKind::Arrow(_, r_arg, r_ret)) => {
+            (TyKind::Arrow(l_arg, l_ret), TyKind::Arrow(r_arg, r_ret)) => {
                 Self::canonicalize(subs, Constraint::equal(l_arg, r_arg))
                     .into_iter()
                     .chain(Self::canonicalize(subs, Constraint::equal(l_ret, r_ret)))
@@ -448,8 +446,9 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
                 if l_args.len() == r_args.len() =>
             {
                 std::iter::once(Constraint::equal(
-                    Ty::path(subs.ctxt, l_h),
-                    Ty::path(subs.ctxt, r_h),
+                    // FIXME real span
+                    Ty::path(subs.ctxt, l_h, Span::dummy()),
+                    Ty::path(subs.ctxt, r_h, Span::dummy()),
                 ))
                 .chain(
                     l_args
@@ -491,12 +490,12 @@ impl<'hir> Constrainable<'hir> for Ty<'hir> {
     }
 
     fn interact_equal(
-        subs: &Substitution<'hir, Ty<'hir>>,
-        l1: Ty<'hir>,
-        r1: Ty<'hir>,
-        l2: Ty<'hir>,
-        r2: Ty<'hir>,
-    ) -> Option<Constraint<'hir, Ty<'hir>>> {
+        subs: &Substitution<'t, Ty<'t>>,
+        l1: Ty<'t>,
+        r1: Ty<'t>,
+        l2: Ty<'t>,
+        r2: Ty<'t>,
+    ) -> Option<Constraint<'t, Ty<'t>>> {
         Some(match (*l1.kind(), *l2.kind()) {
             (TyKind::Uni(a), TyKind::Uni(b)) if a == b => Constraint::equal(r1, r2),
             (TyKind::Skolem(a), TyKind::Skolem(b)) if a == b => Constraint::equal(r1, r2),

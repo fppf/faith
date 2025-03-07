@@ -1,18 +1,21 @@
 use base::pp::FormatIterator;
-use hir::*;
 use span::{
     Span,
     diag::{Diagnostic, Label, Level},
 };
 
-use crate::constraint::{Constraint, UnifyError};
+use crate::{
+    constraint::{Constraint, UnifyError},
+    resolve::Res,
+    typ::{Ty, UniVarId},
+};
 
-pub enum InferError<'hir> {
-    TypeUnifyFail(TypeUnifyError<'hir>),
+pub enum InferError<'t> {
+    TypeUnifyFail(TypeUnifyError<'t>),
     ExprTupleLength(Span, usize, usize),
     PatTupleLength(Span, usize, usize),
-    Import(&'hir std::path::Path, Diagnostic),
-    ResidualConstraints(Vec<Constraint<'hir, Ty<'hir>>>),
+    Import(std::path::PathBuf, Diagnostic),
+    ResidualConstraints(Vec<Constraint<'t, Ty<'t>>>),
 }
 
 impl From<InferError<'_>> for Diagnostic {
@@ -36,25 +39,25 @@ impl From<InferError<'_>> for Diagnostic {
     }
 }
 
-pub enum TypeUnifyError<'hir> {
-    Mismatch(Ty<'hir>, Ty<'hir>),
-    Occurs(UniVarId, Ty<'hir>),
+pub enum TypeUnifyError<'t> {
+    Mismatch(Ty<'t>, Ty<'t>),
+    Occurs(UniVarId, Ty<'t>),
     Length(usize, usize),
-    Lookup(Path<'hir>),
+    Lookup(Res),
 }
 
-impl<'hir> UnifyError<'hir, Ty<'hir>> for TypeUnifyError<'hir> {
+impl<'t> UnifyError<'t, Ty<'t>> for TypeUnifyError<'t> {
     fn length(lhs: usize, rhs: usize) -> Self {
         Self::Length(lhs, rhs)
     }
 
-    fn occurs(var: UniVarId, t: Ty<'hir>) -> Self {
+    fn occurs(var: UniVarId, t: Ty<'t>) -> Self {
         Self::Occurs(var, t)
     }
 }
 
-impl<'hir> From<TypeUnifyError<'hir>> for Diagnostic {
-    fn from(e: TypeUnifyError<'hir>) -> Self {
+impl<'t> From<TypeUnifyError<'t>> for Diagnostic {
+    fn from(e: TypeUnifyError<'t>) -> Self {
         match e {
             TypeUnifyError::Mismatch(t1, t2) => Diagnostic::new(Level::Error)
                 .with_message(format!("cannot unify types {t1} and {t2}"))
@@ -67,9 +70,9 @@ impl<'hir> From<TypeUnifyError<'hir>> for Diagnostic {
             TypeUnifyError::Length(l1, l2) => Diagnostic::new(Level::Error).with_message(format!(
                 "cannot unify type tuple of length {l1} with type tuple of length {l2}"
             )),
-            TypeUnifyError::Lookup(p) => {
-                Diagnostic::new(Level::Error).with_message(format!("cannot find type at path {p}"))
-            }
+            // FIXME res_id -> path
+            TypeUnifyError::Lookup(res_id) => Diagnostic::new(Level::Error)
+                .with_message(format!("cannot find type at path {res_id:?}")),
         }
     }
 }

@@ -9,3 +9,4 @@ description = "AST, lexer, parser, and grammar"
 [dependencies]
 base = { path = "../base" }
 span = { path = "../span" }
+log = { path = "../log" }

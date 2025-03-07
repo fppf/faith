@@ -1,11 +1,15 @@
 use std::cell::Cell;
 
+use base::hash::Map;
 use span::{
-    BytePos, Span,
+    BytePos, SourceId, Span,
     diag::{Diagnostic, Label, Level},
 };
 
-use crate::Arena;
+use crate::{
+    Arena,
+    ast::{AstId, CompUnit},
+};
 
 use super::token::{Token, TokenKind};
 
@@ -15,7 +19,11 @@ pub(crate) struct Parser<'ast> {
     tokens: Vec<Token>,
     pos: usize,
     steps: Cell<u32>,
+    pub ast_id: AstId,
     pub arena: &'ast Arena<'ast>,
+    pub current_comp_unit: SourceId,
+    pub inside_std: bool,
+    pub imports: Map<SourceId, &'ast CompUnit<'ast>>,
 }
 
 #[derive(Clone, Copy)]
@@ -34,13 +42,26 @@ impl Marker {
 }
 
 impl<'ast> Parser<'ast> {
-    pub fn new(arena: &'ast Arena<'ast>, tokens: impl IntoIterator<Item = Token>) -> Self {
+    pub fn new(
+        arena: &'ast Arena<'ast>,
+        current_comp_unit: SourceId,
+        tokens: impl IntoIterator<Item = Token>,
+    ) -> Self {
         Self {
             tokens: tokens.into_iter().collect(),
             pos: 0,
-            steps: Cell::new(0),
+            steps: Cell::default(),
+            ast_id: AstId::ZERO,
             arena,
+            current_comp_unit,
+            inside_std: false,
+            imports: Map::default(),
         }
+    }
+
+    pub fn next_ast_id(&mut self) -> AstId {
+        self.ast_id = self.ast_id + 1;
+        self.ast_id
     }
 
     pub fn nth(&self, n: usize) -> Token {

@@ -1,7 +1,12 @@
-use span::{Ident, SourceId, Sp};
+use span::{
+    Ident, SourceId, Sp, Span, Sym,
+    diag::{Diagnostic, Level},
+};
 
 use crate::{
+    PathOrStr,
     ast::*,
+    make_parser,
     parser::{ParseError, ParseResult, Parser},
     token::{LitToken, TokenKind::*},
 };
@@ -18,18 +23,22 @@ macro_rules! alloc_iter {
     };
 }
 
-pub fn program<'ast>(
-    source_id: SourceId,
-    p: &mut Parser<'ast>,
-) -> ParseResult<&'ast Program<'ast>> {
-    let unit = comp_unit_eof(source_id, p, false)?;
+pub fn program<'ast>(mut p: Parser<'ast>) -> ParseResult<&'ast Program<'ast>> {
+    let unit = comp_unit_eof(p.current_comp_unit, &mut p, false)?;
     p.expect(KW_MAIN)?;
     p.expect(EQUAL)?;
-    let main = alloc!(p, expr(p)?);
+    let main = alloc!(p, expr(&mut p)?);
     let m = p.start();
     while p.eat(NEWLINE) {}
     if p.at(EOF) {
-        Ok(alloc!(p, Program { unit, main }))
+        Ok(alloc!(
+            p,
+            Program {
+                unit,
+                main,
+                imports: p.imports
+            }
+        ))
     } else {
         while !p.at(EOF) {
             p.bump_any();
@@ -42,7 +51,62 @@ pub fn comp_unit<'ast>(
     source_id: SourceId,
     p: &mut Parser<'ast>,
 ) -> ParseResult<&'ast CompUnit<'ast>> {
-    comp_unit_eof(source_id, p, true)
+    let comp_unit = comp_unit_eof(source_id, p, true)?;
+    p.imports.insert(source_id, comp_unit);
+    Ok(comp_unit)
+}
+
+fn parse_import<'ast>(
+    import_path: &std::path::Path,
+    span: Span,
+    p: &mut Parser<'ast>,
+) -> ParseResult<SourceId> {
+    let mut file_path = std::path::PathBuf::new();
+    if let Some(base_path) = span::with_source_map(|sm| sm[p.current_comp_unit].path.clone()) {
+        file_path.push(base_path.parent().unwrap());
+    }
+    file_path.push(import_path);
+    Ok(
+        if let Some(source_id) =
+            span::with_source_map(|sm| sm.lookup_existing_source_id(&file_path))
+        {
+            source_id
+        } else {
+            let mut sub_p =
+                make_parser(p.arena, PathOrStr::Path(&file_path)).map_err(|_e /*FIXME*/| {
+                    ParseError::new(format!("cannot parse {}", file_path.display()), span)
+                })?;
+            sub_p.inside_std = p.inside_std;
+            log::info!("parsing '{}'", import_path.display());
+            let comp_unit = comp_unit(sub_p.current_comp_unit, &mut sub_p)?;
+            p.imports.extend(sub_p.imports);
+            comp_unit.source_id
+        },
+    )
+}
+
+fn std_import_item<'ast>(p: &mut Parser<'ast>) -> ParseResult<Option<Sp<Item<'ast>>>> {
+    let import_path =
+        std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into())).join("std.fth");
+    if !import_path.exists() {
+        span::diag::emit(Diagnostic::new(Level::Warn).with_message(format!(
+            "cannot find standard library at '{}'",
+            import_path.display()
+        )));
+        return Ok(None);
+    }
+
+    p.inside_std = true;
+    let source_id = parse_import(&import_path, Span::dummy(), p)?;
+    p.inside_std = false;
+    Ok(Some(Sp::new(
+        Item::Mod(
+            Id::new(Ident::new(Sym::intern("std"), Span::dummy()), AstId::ZERO),
+            p.arena
+                .alloc(Sp::new(ModExpr::Import(source_id), Span::dummy())),
+        ),
+        Span::dummy(),
+    )))
 }
 
 fn comp_unit_eof<'ast>(
@@ -51,6 +115,11 @@ fn comp_unit_eof<'ast>(
     eof: bool,
 ) -> ParseResult<&'ast CompUnit<'ast>> {
     let mut items = Vec::new();
+    if !p.inside_std {
+        if let Some(std) = std_import_item(p)? {
+            items.push(std);
+        }
+    }
     p.eat(NEWLINE);
     while !p.at(EOF) && !p.at(KW_MAIN) {
         items.push(struct_item(p)?);
@@ -179,7 +248,10 @@ fn path<'ast>(p: &mut Parser<'ast>) -> ParseResult<(Path<'ast>, PathKind)> {
     }
 
     if !p.at(DOT) {
-        return Ok((Path::new(root, &[], root.span), PathKind::Ident(kind)));
+        return Ok((
+            Path::new(root, &[], root.span, p.next_ast_id()),
+            PathKind::Ident(kind),
+        ));
     }
 
     let mut access = Vec::new();
@@ -200,7 +272,7 @@ fn path<'ast>(p: &mut Parser<'ast>) -> ParseResult<(Path<'ast>, PathKind)> {
     }
 
     Ok((
-        Path::new(root, alloc_iter!(p, access), p.end(m)),
+        Path::new(root, alloc_iter!(p, access), p.end(m), p.next_ast_id()),
         PathKind::Path(kind),
     ))
 }
@@ -212,20 +284,26 @@ fn path_without_infix<'ast>(p: &mut Parser<'ast>) -> ParseResult<Path<'ast>> {
     while !p.at(EOF) && p.eat(DOT) {
         access.push(ident_lower(p)?);
     }
-    Ok(Path::new(root, alloc_iter!(p, access), p.end(m)))
+    Ok(Path::new(
+        root,
+        alloc_iter!(p, access),
+        p.end(m),
+        p.next_ast_id(),
+    ))
 }
 
-fn expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     let (path, kind) = path(p)?;
-    Ok(Sp::new(
+    Ok(Expr::new(
         match kind {
             PathKind::Path(IdentKind::Cons) | PathKind::Ident(IdentKind::Cons) => {
-                Expr::Constructor(path)
+                ExprKind::Constructor(path)
             }
-            _ => Expr::Path(path),
+            _ => ExprKind::Path(path),
         },
         p.end(m),
+        p.next_ast_id(),
     ))
 }
 
@@ -237,7 +315,7 @@ fn at_type_atom(p: &Parser<'_>) -> bool {
     )
 }
 
-fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(L_PAREN);
     let first = expr(p)?;
@@ -247,22 +325,30 @@ fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     if p.eat(COLON) {
         let t = type_(p)?;
         p.expect(R_PAREN)?;
-        return Ok(Sp::new(Expr::Ann(alloc!(p, first), alloc!(p, t)), p.end(m)));
+        return Ok(Expr::new(
+            ExprKind::Ann(alloc!(p, first), alloc!(p, t)),
+            p.end(m),
+            p.next_ast_id(),
+        ));
     }
     let mut elements = vec![first];
     while !p.at(EOF) && p.eat(COMMA) {
         elements.push(expr(p)?);
     }
     p.expect(R_PAREN)?;
-    Ok(Sp::new(Expr::Tuple(alloc_iter!(p, elements)), p.end(m)))
+    Ok(Expr::new(
+        ExprKind::Tuple(alloc_iter!(p, elements)),
+        p.end(m),
+        p.next_ast_id(),
+    ))
 }
 
-fn expr_lit<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_lit<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let l = lit(p)?;
-    Ok(Sp::new(Expr::Lit(*l), l.span()))
+    Ok(Expr::new(ExprKind::Lit(*l), l.span(), p.next_ast_id()))
 }
 
-fn expr_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     match p.current().kind {
         IDENT(..) => expr_path(p),
         UNIT | LIT(..) => expr_lit(p),
@@ -276,11 +362,11 @@ fn expr_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     }
 }
 
-fn expr_record<'ast>(_p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_record<'ast>(_p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     todo!("record literals")
 }
 
-fn expr_vector<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_vector<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(L_BRAC);
     let mut elements = Vec::new();
@@ -291,10 +377,14 @@ fn expr_vector<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
         }
     }
     p.expect(R_BRAC)?;
-    Ok(Sp::new(Expr::Vector(alloc_iter!(p, elements)), p.end(m)))
+    Ok(Expr::new(
+        ExprKind::Vector(alloc_iter!(p, elements)),
+        p.end(m),
+        p.next_ast_id(),
+    ))
 }
 
-fn expr_if<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_if<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(KW_IF);
     let cond = expr(p)?;
@@ -302,13 +392,14 @@ fn expr_if<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     let then = expr(p)?;
     p.expect(KW_ELSE)?;
     let els = expr(p)?;
-    Ok(Sp::new(
-        Expr::If(alloc!(p, cond), alloc!(p, then), alloc!(p, els)),
+    Ok(Expr::new(
+        ExprKind::If(alloc!(p, cond), alloc!(p, then), alloc!(p, els)),
         p.end(m),
+        p.next_ast_id(),
     ))
 }
 
-fn expr_let<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_let<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(KW_LET);
     let mut bindings = Vec::new();
@@ -326,13 +417,14 @@ fn expr_let<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
         return Err(ParseError::new("let expression missing binds", p.end(m)));
     }
     let body = expr(p)?;
-    Ok(Sp::new(
-        Expr::Let(alloc_iter!(p, bindings), alloc!(p, body)),
+    Ok(Expr::new(
+        ExprKind::Let(alloc_iter!(p, bindings), alloc!(p, body)),
         p.end(m),
+        p.next_ast_id(),
     ))
 }
 
-fn expr_case<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_case<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(KW_CASE);
     let e = expr_atom(p)?;
@@ -351,13 +443,14 @@ fn expr_case<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     if arms.is_empty() {
         return Err(ParseError::new("case has no arms", p.end(m)));
     }
-    Ok(Sp::new(
-        Expr::Case(alloc!(p, e), alloc_iter!(p, arms)),
+    Ok(Expr::new(
+        ExprKind::Case(alloc!(p, e), alloc_iter!(p, arms)),
         p.end(m),
+        p.next_ast_id(),
     ))
 }
 
-fn expr_lambda<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_lambda<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(BACKSLASH);
     let mut args = Vec::new();
@@ -372,16 +465,17 @@ fn expr_lambda<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
         ));
     }
     let body = expr(p)?;
-    Ok(Sp::new(
-        Expr::Lambda(Lambda {
+    Ok(Expr::new(
+        ExprKind::Lambda(Lambda {
             args: alloc_iter!(p, args),
             body: alloc!(p, body),
         }),
         p.end(m),
+        p.next_ast_id(),
     ))
 }
 
-fn expr_<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     match p.current().kind {
         KW_IF => expr_if(p),
         KW_LET => expr_let(p),
@@ -398,7 +492,7 @@ fn at_expr_atom(p: &Parser<'_>) -> bool {
     )
 }
 
-fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     let head = expr_atom(p)?;
     let mut args = Vec::new();
@@ -408,14 +502,15 @@ fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
     if args.is_empty() {
         Ok(head)
     } else {
-        Ok(Sp::new(
-            Expr::Call(alloc!(p, head), alloc_iter!(p, args)),
+        Ok(Expr::new(
+            ExprKind::Call(alloc!(p, head), alloc_iter!(p, args)),
             p.end(m),
+            p.next_ast_id(),
         ))
     }
 }
 
-fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>> {
+fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     let mut lhs = expr_app(p)?;
     while let Some(((l_bp, r_bp), op)) = infix_op(p)
@@ -423,15 +518,16 @@ fn expr_bp<'ast>(p: &mut Parser<'ast>, min_bp: u8) -> ParseResult<Sp<Expr<'ast>>
     {
         p.bump_any();
         let rhs = expr_bp(p, r_bp)?;
-        lhs = Sp::new(
-            Expr::Call(alloc!(p, op), alloc_iter!(p, [lhs, rhs])),
+        lhs = Expr::new(
+            ExprKind::Call(alloc!(p, op), alloc_iter!(p, [lhs, rhs])),
             p.end(m),
+            p.next_ast_id(),
         );
     }
     Ok(lhs)
 }
 
-fn infix_op<'ast>(p: &mut Parser<'ast>) -> Option<((u8, u8), Sp<Expr<'ast>>)> {
+fn infix_op<'ast>(p: &mut Parser<'ast>) -> Option<((u8, u8), Expr<'ast>)> {
     let (id, c) = match p.current().kind {
         INFIX(id, c) => (id, c),
         _ => return None,
@@ -444,48 +540,55 @@ fn infix_op<'ast>(p: &mut Parser<'ast>) -> Option<((u8, u8), Sp<Expr<'ast>>)> {
         ':' => (2, 1),
         _ => unreachable!(),
     };
-    let op = Sp::new(
-        Expr::Path(Path::new(id, &[], p.current().span)),
+    let op = Expr::new(
+        ExprKind::Path(Path::new(id, &[], p.current().span, p.next_ast_id())),
         p.current().span,
+        p.next_ast_id(),
     );
     Some((bp, op))
 }
 
-pub fn expr<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Expr<'ast>>> {
+pub fn expr<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     let first = expr_(p)?;
     if p.eat(SEMICOLON) {
         let second = expr(p)?;
-        Ok(Sp::new(
-            Expr::Seq(alloc!(p, first), alloc!(p, second)),
+        Ok(Expr::new(
+            ExprKind::Seq(alloc!(p, first), alloc!(p, second)),
             p.end(m),
+            p.next_ast_id(),
         ))
     } else {
         Ok(first)
     }
 }
 
-fn pat_lit<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
+fn pat_lit<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     let l = lit(p)?;
-    Ok(Sp::new(Pat::Lit(*l), l.span()))
+    Ok(Pat::new(PatKind::Lit(*l), l.span(), p.next_ast_id()))
 }
 
-fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
+fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     let m = p.start();
     match p.current().kind {
         UNDERSCORE => {
             p.bump(UNDERSCORE);
-            Ok(Sp::new(Pat::Wild, p.end(m)))
+            Ok(Pat::new(PatKind::Wild, p.end(m), p.next_ast_id()))
         }
         IDENT(id, false) => {
             p.bump_any();
-            Ok(Sp::new(Pat::Var(id), p.end(m)))
+            Ok(Pat::new(
+                PatKind::Var(Id::new(id, p.next_ast_id())),
+                p.end(m),
+                p.next_ast_id(),
+            ))
         }
         IDENT(id, true) => {
             p.bump_any();
-            Ok(Sp::new(
-                Pat::Constructor(Path::new(id, &[], id.span), &[]),
+            Ok(Pat::new(
+                PatKind::Constructor(Path::new(id, &[], id.span, p.next_ast_id()), &[]),
                 p.end(m),
+                p.next_ast_id(),
             ))
         }
         UNIT | LIT(..) => pat_lit(p),
@@ -494,7 +597,7 @@ fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
     }
 }
 
-fn pat_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
+fn pat_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     let m = p.start();
     p.bump(L_PAREN);
     let first = pattern(p)?;
@@ -504,17 +607,25 @@ fn pat_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
     if p.eat(COLON) {
         let t = type_(p)?;
         p.expect(R_PAREN)?;
-        return Ok(Sp::new(Pat::Ann(alloc!(p, first), alloc!(p, t)), p.end(m)));
+        return Ok(Pat::new(
+            PatKind::Ann(alloc!(p, first), alloc!(p, t)),
+            p.end(m),
+            p.next_ast_id(),
+        ));
     }
     let mut rest = vec![first];
     while !p.at(EOF) && p.eat(COMMA) {
         rest.push(pattern(p)?);
     }
     p.expect(R_PAREN)?;
-    Ok(Sp::new(Pat::Tuple(alloc_iter!(p, rest)), p.end(m)))
+    Ok(Pat::new(
+        PatKind::Tuple(alloc_iter!(p, rest)),
+        p.end(m),
+        p.next_ast_id(),
+    ))
 }
 
-fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
+fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     fn at_pat_atom(p: &Parser<'_>) -> bool {
         matches!(
             p.current().kind,
@@ -534,7 +645,11 @@ fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
                     ));
                 }
                 PathKind::Ident(IdentKind::Var) => {
-                    return Ok(Sp::new(Pat::Var(path.leaf()), path.span()));
+                    return Ok(Pat::new(
+                        PatKind::Var(Id::new(path.leaf(), p.next_ast_id())),
+                        path.span(),
+                        p.next_ast_id(),
+                    ));
                 }
                 _ => (),
             }
@@ -548,16 +663,17 @@ fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
             } else {
                 Vec::new()
             };
-            Ok(Sp::new(
-                Pat::Constructor(path, alloc_iter!(p, args)),
+            Ok(Pat::new(
+                PatKind::Constructor(path, alloc_iter!(p, args)),
                 p.end(m),
+                p.next_ast_id(),
             ))
         }
         _ => pat_atom(p),
     }
 }
 
-fn pattern<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
+fn pattern<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     let m = p.start();
     let first = pat_ctor(p)?;
     let mut rest = Vec::new();
@@ -568,8 +684,22 @@ fn pattern<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Pat<'ast>>> {
         Ok(first)
     } else {
         rest.splice(0..0, [first]);
-        Ok(Sp::new(Pat::Or(alloc_iter!(p, rest)), p.end(m)))
+        Ok(Pat::new(
+            PatKind::Or(alloc_iter!(p, rest)),
+            p.end(m),
+            p.next_ast_id(),
+        ))
     }
+}
+
+fn type_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
+    let path = path_without_infix(p)?;
+    if path.access.is_empty()
+        && let Some(base) = base_type(path.root)
+    {
+        return Ok(Sp::new(Type::Base(base), path.span()));
+    }
+    Ok(Sp::new(Type::App(path, &[]), path.span()))
 }
 
 fn type_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
@@ -586,7 +716,7 @@ fn type_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
         L_BRAC => type_vector(p),
         VAR(id) => {
             p.bump_any();
-            Ok(Sp::new(Type::Var(id), p.end(m)))
+            Ok(Sp::new(Type::Var(Id::new(id, p.next_ast_id())), p.end(m)))
         }
         _ => Err(ParseError::new("expected atomic type", p.end(m))),
     }
@@ -607,16 +737,6 @@ fn base_type(id: Ident) -> Option<BaseType> {
         "i32" => BaseType::Int32,
         _ => return None,
     })
-}
-
-fn type_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
-    let path = path_without_infix(p)?;
-    if path.access.is_empty()
-        && let Some(base) = base_type(path.root)
-    {
-        return Ok(Sp::new(Type::Base(base), path.span()));
-    }
-    Ok(Sp::new(Type::Path(path), path.span()))
 }
 
 fn type_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
@@ -643,7 +763,7 @@ fn type_row<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
         let id = ident_lower(p)?;
         p.expect(COLON)?;
         let typ = type_(p)?;
-        fields.push((id, typ));
+        fields.push((Id::new(id, p.next_ast_id()), typ));
         if !p.eat(COMMA) {
             break;
         }
@@ -693,11 +813,11 @@ fn type_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
         Ok(head)
     } else {
         match *head {
-            Type::Path(cons_path) => Ok(Sp::new(
+            Type::App(cons_path, empty_args) if empty_args.is_empty() => Ok(Sp::new(
                 Type::App(cons_path, alloc_iter!(p, args)),
                 p.end(m),
             )),
-            _ => Err(ParseError::new("expected a type constructor", head.span())),
+            _ => Err(ParseError::new("expected a type path", head.span())),
         }
     }
 }
@@ -705,13 +825,13 @@ fn type_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
 fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
     let m = p.start();
     p.bump(KW_TYPE);
-    let id = ident_lower(p)?;
+    let id = Id::new(ident_lower(p)?, p.next_ast_id());
     let mut vars = Vec::new();
     while !p.at(EOF)
         && let VAR(s) = p.current().kind
     {
         p.bump_any();
-        vars.push(s);
+        vars.push(Id::new(s, p.next_ast_id()));
     }
     let vars = alloc_iter!(p, vars);
     p.expect(EQUAL)?;
@@ -732,7 +852,7 @@ fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
                         ));
                     }
                 }
-                variants.push((ctor, alloc_iter!(p, args)));
+                variants.push((Id::new(ctor, p.next_ast_id()), alloc_iter!(p, args)));
                 if !p.eat(COMMA) {
                     break;
                 }
@@ -776,10 +896,11 @@ fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let m = p.start();
     p.bump(KW_VAL);
     let (id, kind) = ident_or_infix(p)?;
+    let id = Id::new(id, p.next_ast_id());
     if kind == IdentKind::Cons {
         return Err(ParseError::new(
             "expected lowercase identifier or parenthesized infix operator for value name",
-            id.span,
+            id.ident.span,
         ));
     }
     let mut args = Vec::new();
@@ -794,20 +915,21 @@ fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     p.expect(EQUAL)?;
     let body = alloc!(p, expr(p)?);
     if args.is_empty() {
-        Ok(Sp::new(Item::Val(id, typ, body), p.end(m)))
+        Ok(Sp::new(Item::Value(id, typ, body), p.end(m)))
     } else {
         Ok(Sp::new(
-            Item::Val(
+            Item::Value(
                 id,
                 typ,
                 alloc!(
                     p,
-                    Sp::new(
-                        Expr::Lambda(Lambda {
+                    Expr::new(
+                        ExprKind::Lambda(Lambda {
                             args: alloc_iter!(p, args),
                             body,
                         }),
-                        body.span(),
+                        body.span,
+                        p.next_ast_id(),
                     )
                 ),
             ),
@@ -822,7 +944,10 @@ fn struct_item_mod<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let id = ident_lower(p)?;
     p.expect(EQUAL)?;
     let me = mod_expr(p)?;
-    Ok(Sp::new(Item::Mod(id, alloc!(p, me)), p.end(m)))
+    Ok(Sp::new(
+        Item::Mod(Id::new(id, p.next_ast_id()), alloc!(p, me)),
+        p.end(m),
+    ))
 }
 
 fn lit_str(p: &mut Parser<'_>) -> ParseResult<Ident> {
@@ -857,7 +982,14 @@ fn struct_item_external<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>
     let t = type_(p)?;
     p.expect(EQUAL)?;
     let s = lit_str(p)?;
-    Ok(Sp::new(Item::External(ident, alloc!(p, t), s), p.end(m)))
+    Ok(Sp::new(
+        Item::Value(
+            Id::new(ident, p.next_ast_id()),
+            Some(alloc!(p, t)),
+            alloc!(p, Expr::new(ExprKind::External(s), s.span, p.next_ast_id())),
+        ),
+        p.end(m),
+    ))
 }
 
 pub fn mod_expr<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>> {
@@ -897,6 +1029,8 @@ fn mod_expr_import<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<ModExpr<'ast>>>
     let m = p.start();
     p.expect(KW_IMPORT)?;
     let path = lit_str(p)?;
-    let path = std::path::Path::new(p.arena.alloc_str(&path.to_string()));
-    Ok(Sp::new(ModExpr::Import(path), p.end(m)))
+    let span = path.span;
+    let path = std::path::PathBuf::from(path.to_string());
+    let source_id = parse_import(&path, span, p)?;
+    Ok(Sp::new(ModExpr::Import(source_id), p.end(m)))
 }

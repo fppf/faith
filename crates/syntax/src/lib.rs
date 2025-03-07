@@ -9,73 +9,47 @@ mod token;
 
 use lexer::Lexer;
 use parser::Parser;
-use span::{
-    Ident, Sp, Span, Sym,
-    diag::{Diagnostic, Level},
-};
+use span::diag::{Diagnostic, Level};
 
-// An ephemeral AST arena, constructed to parse a single compilation unit
-// on demand and dropped after the AST fragment is lowered to HIR.
-base::declare_arena!('ast, []);
+base::declare_arena!('ast, [
+    program: ast::Program<'ast>,
+]);
 
 pub fn parse_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     path: &std::path::Path,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    path_check(path)?;
-    span::with_source_map(|sm| {
-        let source_id = sm.load_file(path).map_err(map_load_error)?;
-        let mut parser = Parser::new(arena, Lexer::new(&sm[source_id]));
-        grammar::program(source_id, &mut parser).map_err(Diagnostic::from)
-    })
-}
-
-pub fn parse_comp_unit_in<'ast>(
-    arena: &'ast Arena<'ast>,
-    path: &std::path::Path,
-) -> Result<&'ast ast::CompUnit<'ast>, Diagnostic> {
-    path_check(path)?;
-    span::with_source_map(|sm| {
-        let source_id = sm.load_file(path).map_err(map_load_error)?;
-        let mut parser = Parser::new(arena, Lexer::new(&sm[source_id]));
-        grammar::comp_unit(source_id, &mut parser).map_err(Diagnostic::from)
-    })
+    let parser = make_parser(arena, PathOrStr::Path(path))?;
+    grammar::program(parser).map_err(Diagnostic::from)
 }
 
 pub fn parse_str_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     src: &str,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    span::with_source_map(|sm| {
-        let source_id = sm.load_str(src);
-        let mut parser = Parser::new(arena, Lexer::new(&sm[source_id]));
-        grammar::program(source_id, &mut parser).map_err(Diagnostic::from)
-    })
+    let parser = make_parser(arena, PathOrStr::Str(src))?;
+    grammar::program(parser).map_err(Diagnostic::from)
 }
 
-pub fn std_import<'ast>(arena: &'ast Arena<'ast>) -> Result<&'ast Sp<ast::Item<'ast>>, Diagnostic> {
-    let mod_ident = Ident::new(Sym::intern("std"), Span::dummy());
-    let import_path =
-        std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into())).join("std.fth");
-    let import_path = arena.alloc_str(&import_path.to_string_lossy());
-    let import_path = arena.alloc(std::path::Path::new(import_path));
+pub(crate) enum PathOrStr<'a> {
+    Path(&'a std::path::Path),
+    Str(&'a str),
+}
 
-    if !import_path.exists() {
-        println!("here");
-        return Err(Diagnostic::new(Level::Warn).with_message(format!(
-            "cannot find standard library at '{}'",
-            import_path.display()
-        )));
-    }
-
-    let import_item = arena.alloc(Sp::new(
-        ast::Item::Mod(
-            mod_ident,
-            arena.alloc(Sp::new(ast::ModExpr::Import(import_path), Span::dummy())),
-        ),
-        Span::dummy(),
-    ));
-    Ok(import_item)
+pub(crate) fn make_parser<'ast>(
+    arena: &'ast Arena<'ast>,
+    source: PathOrStr<'_>,
+) -> Result<Parser<'ast>, Diagnostic> {
+    span::with_source_map(|sm| {
+        let source_id = match source {
+            PathOrStr::Path(path) => {
+                path_check(path)?;
+                sm.load_file(path).map_err(map_load_error)?
+            }
+            PathOrStr::Str(s) => sm.load_str(s),
+        };
+        Ok(Parser::new(arena, source_id, Lexer::new(&sm[source_id])))
+    })
 }
 
 fn path_check(path: &std::path::Path) -> Result<(), Diagnostic> {
@@ -97,7 +71,7 @@ fn path_check(path: &std::path::Path) -> Result<(), Diagnostic> {
     }
 }
 
-fn map_load_error(e: span::LoadError) -> Diagnostic {
+pub(crate) fn map_load_error(e: span::LoadError) -> Diagnostic {
     Diagnostic::new(Level::Error).with_message(format!(
         "could not load file '{}': {}",
         e.path.display(),
