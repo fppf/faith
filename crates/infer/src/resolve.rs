@@ -18,7 +18,7 @@ use syntax::ast::{
 
 use crate::{
     TyCtxt,
-    typ::{Ty, TypeVar},
+    typ::{Ty, TyKind, TypeVar},
 };
 
 base::newtype_index! {
@@ -90,7 +90,6 @@ impl<'ast, 't> Index<AstId> for Resolution<'ast, 't> {
 
 #[derive(Debug)]
 enum ResolveError {
-    Parse(Diagnostic),
     Resolve(String, Span),
     DuplicateLocalBinding(Sym, Span, Vec<Span>),
     DuplicateItemBinding(Namespace, Sym, Span, Span),
@@ -101,7 +100,6 @@ enum ResolveError {
 impl From<ResolveError> for Diagnostic {
     fn from(error: ResolveError) -> Self {
         match error {
-            ResolveError::Parse(diag) => diag,
             ResolveError::Resolve(path, span) => Diagnostic::new(Level::Error)
                 .with_message(format!("cannot resolve `{path}`"))
                 .with_labels(vec![Label::new(span, "not found").primary()]),
@@ -598,7 +596,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
         match decl.kind {
             TypeDeclKind::Alias(typ) => {
-                //let typ = self.lower_type(typ)?;
+                let typ = self.lower_type(typ)?;
                 //FIXME self.ctxt.set_type(res_id, typ);
             }
             TypeDeclKind::Variant(variants) => {
@@ -638,54 +636,50 @@ impl<'ast, 't> Resolver<'ast, 't> {
         Ok(())
     }
 
-    fn lower_type(&'t mut self, typ: &'ast Sp<Type<'ast>>) -> Result<Ty<'t>, ResolveError> {
-        //self.lower_type_unscoped(typ)
-        todo!()
+    fn lower_type(&mut self, typ: &'ast Sp<Type<'ast>>) -> Result<Ty<'t>, ResolveError> {
+        self.lower_type_unscoped(typ)
     }
 
-    // fn lower_type_unscoped(
-    //     &'t mut self,
-    //     typ: &'ast Sp<Type<'ast>>,
-    // ) -> Result<Ty<'t>, ResolveError> {
-    //     let ty = match typ.value {
-    //         Type::Base(b) => Ty::new(self.ctxt, TyKind::Base(b), typ.span()),
-    //         Type::Var(id) => {
-    //             /*
-    //             let id = self
-    //                 .renamer
-    //                 .find_ident(Namespace::Type, *a)
-    //                 .unwrap_or_else(|_| self.renamer.fresh_ident(Namespace::Type, *a));
-    //                 */
-    //             Ty::type_var(self.ctxt, TypeVar::new(id.ident))
-    //         }
-    //         Type::Arrow(arg, ret) => {
-    //             let arg = self.lower_type_unscoped(arg)?;
-    //             let ret = self.lower_type_unscoped(ret)?;
-    //             Ty::arrow(self.ctxt, arg, ret)
-    //         }
-    //         Type::Tuple(ts) => {
-    //             let mut elems = Vec::with_capacity(ts.len());
-    //             for t in ts.iter() {
-    //                 elems.push(self.lower_type_unscoped(t)?);
-    //             }
-    //             Ty::tuple(self.ctxt, elems, typ.span())
-    //         }
-    //         Type::Vector(t) => {
-    //             let t = self.lower_type_unscoped(t)?;
-    //             Ty::new(self.ctxt, TyKind::Vector(t), typ.span())
-    //         }
-    //         Type::App(head, ts) => {
-    //             let res = self.resolve_path(Namespace::Type, head)?;
-    //             let mut args = Vec::with_capacity(ts.len());
-    //             for t in ts.iter() {
-    //                 args.push(self.lower_type_unscoped(t)?);
-    //             }
-    //             Ty::app(self.ctxt, res.res_id(), args, typ.span())
-    //         }
-    //         Type::Row(..) => todo!("record types"),
-    //     };
-    //     Ok(ty)
-    // }
+    fn lower_type_unscoped(&mut self, typ: &'ast Sp<Type<'ast>>) -> Result<Ty<'t>, ResolveError> {
+        let ty = match typ.value {
+            Type::Base(b) => Ty::new(self.ctxt, TyKind::Base(b), typ.span()),
+            Type::Var(id) => {
+                /*
+                let id = self
+                    .renamer
+                    .find_ident(Namespace::Type, *a)
+                    .unwrap_or_else(|_| self.renamer.fresh_ident(Namespace::Type, *a));
+                    */
+                Ty::type_var(self.ctxt, TypeVar::new(id.ident))
+            }
+            Type::Arrow(arg, ret) => {
+                let arg = self.lower_type_unscoped(arg)?;
+                let ret = self.lower_type_unscoped(ret)?;
+                Ty::arrow(self.ctxt, arg, ret)
+            }
+            Type::Tuple(ts) => {
+                let mut elems = Vec::with_capacity(ts.len());
+                for t in ts.iter() {
+                    elems.push(self.lower_type_unscoped(t)?);
+                }
+                Ty::tuple(self.ctxt, elems, typ.span())
+            }
+            Type::Vector(t) => {
+                let t = self.lower_type_unscoped(t)?;
+                Ty::new(self.ctxt, TyKind::Vector(t), typ.span())
+            }
+            Type::App(head, ts) => {
+                let res = self.resolve_path(Namespace::Type, head)?;
+                let mut args = Vec::with_capacity(ts.len());
+                for t in ts.iter() {
+                    args.push(self.lower_type_unscoped(t)?);
+                }
+                Ty::app(self.ctxt, res, args, typ.span())
+            }
+            Type::Row(..) => todo!("record types"),
+        };
+        Ok(ty)
+    }
 
     fn resolve_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<(), ResolveError> {
         match pat.kind {
@@ -752,7 +746,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 self.with_local_scope(|self_| self_.resolve_expr(e1))?;
                 self.with_local_scope(|self_| self_.resolve_expr(e2))
             }
-            ExprKind::Ann(e, t) => self.resolve_expr(e),
+            ExprKind::Ann(e, _t) => self.resolve_expr(e),
             ExprKind::Call(head, es) => {
                 self.resolve_expr(head)?;
                 for e in es.iter() {

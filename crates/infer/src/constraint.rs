@@ -1,4 +1,4 @@
-use std::{fmt, hash::Hash, marker::PhantomData};
+use std::fmt;
 
 use base::hash::IndexSet;
 use span::Span;
@@ -6,7 +6,6 @@ use span::Span;
 use crate::{
     TypeChecker,
     error::TypeUnifyError,
-    substitution::Substitution,
     typ::{Ty, TyKind},
 };
 
@@ -95,11 +94,9 @@ impl<'t> TypeChecker<'_, 't> {
         if lhs.len() != rhs.len() {
             return Err(TypeUnifyError::Length(lhs.len(), rhs.len()));
         }
-
         for (&l, &r) in lhs.iter().zip(rhs) {
             self.try_unify(l, r)?;
         }
-
         Ok(())
     }
 
@@ -200,7 +197,7 @@ impl<'t> TypeChecker<'_, 't> {
         l2: Ty<'t>,
         r2: Ty<'t>,
     ) -> Option<Constraint<'t>> {
-        Some(match (*l1.kind(), *l2.kind()) {
+        Some(match (l1.kind(), l2.kind()) {
             (TyKind::Uni(a), TyKind::Uni(b)) if a == b => Constraint::equal(r1, r2),
             (TyKind::Skolem(a), TyKind::Skolem(b)) if a == b => Constraint::equal(r1, r2),
             (TyKind::Var(a), TyKind::Var(b)) if a.name.sym == b.name.sym => {
@@ -209,7 +206,7 @@ impl<'t> TypeChecker<'_, 't> {
             (TyKind::Uni(a), TyKind::Uni(_)) if self.subs.occurs(a.id, r2) => {
                 //subs.insert(a.id, r1);
                 //Constraint::equal(l2, subs.apply(r2))
-                Constraint::equal(l2, r2.subst_uni_var(self.ctxt, a, r1))
+                Constraint::equal(l2, r2.subst_uni_var(self.ctxt, *a, r1))
             }
             (_, _) => return None,
         })

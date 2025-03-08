@@ -2,6 +2,12 @@ use std::fmt;
 
 use crate::ast::*;
 
+impl fmt::Display for Id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.ident.fmt(f)
+    }
+}
+
 impl fmt::Display for Path<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.root.fmt(f)?;

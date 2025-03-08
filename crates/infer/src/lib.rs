@@ -1,6 +1,5 @@
 #![feature(never_type)]
 #![feature(let_chains)]
-#![allow(unused)]
 
 use base::hash::Map;
 use resolve::{Res, ResId, Resolution};
@@ -34,11 +33,7 @@ impl Default for TyCtxt<'_> {
     }
 }
 
-impl<'t> TyCtxt<'t> {
-    pub fn typ(&'t self, kind: TyKind<'t>, span: Span) -> Ty<'t> {
-        Ty::new(self, kind, span)
-    }
-}
+impl<'t> TyCtxt<'t> {}
 
 pub fn infer_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
@@ -105,7 +100,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
     }
 
     fn type_from_lit(&self, lit: Lit, span: Span) -> Ty<'t> {
-        self.ctxt.typ(TyKind::Base(lit.base_type()), span)
+        Ty::new(self.ctxt, TyKind::Base(lit.base_type()), span)
     }
 
     fn constrain(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) {
@@ -189,7 +184,8 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
 
             fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
                 if let TyKind::Var(var) = typ.kind() {
-                    Ty::skolem(self.ctxt, self.skolems[var])
+                    let skolem = self.skolems[var];
+                    Ty::new(self.ctxt(), TyKind::Skolem(skolem), skolem.name.span)
                 } else {
                     typ.fold_with(self)
                 }
@@ -202,12 +198,11 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             .map(|&var| (var, Skolem::new(self.fresh_skolem(), var.name)))
             .collect();
 
-        let skolemized = SkolemReplacer {
+        SkolemReplacer {
             ctxt: self.ctxt,
             skolems,
         }
-        .fold(typ);
-        skolemized
+        .fold(typ)
     }
 
     fn solve_current(&mut self) -> Result<(), InferError<'t>> {
@@ -234,23 +229,38 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
     fn infer_items(&mut self, items: &'ast [Sp<Item<'ast>>]) -> Result<(), InferError<'t>> {
         log::trace!("{{");
         log::block_in();
-        //FIXME
-        // for (&id, value) in &items.values {
-        //     let typ = match value.typ {
-        //         Some(typ) => {
-        //             self.check_expr(value.expr, typ)?;
-        //             self.solve_current()?;
-        //             typ
-        //         }
-        //         None => self.infer_solve_expr(value.expr)?,
-        //     };
-        //     log::trace!("{id} : {typ}");
-        //     self.ctxt.set_type(value.path.res().hir_id(), typ);
-        // }
-        // for (id, mexpr) in &items.modules {
-        //     log::trace!("mod {id}");
-        //     self.infer_mod_expr(mexpr)?;
-        // }
+        for item in items {
+            match item.value {
+                Item::Type(..) => (),
+                Item::Value(id, _, expr) => {
+                    let res = self.res[id.ast_id];
+                    let value = self
+                        .res
+                        .values
+                        .get(&res)
+                        .unwrap_or_else(|| panic!("ICE: expected '{id}' to be lowered"));
+
+                    let typ = if value.recursive {
+                        self.fresh_var()
+                    } else {
+                        match value.typ {
+                            Some(typ) => {
+                                self.check_expr(expr, typ)?;
+                                self.solve_current()?;
+                                typ
+                            }
+                            None => self.infer_solve_expr(expr)?,
+                        }
+                    };
+                    log::trace!("{id} : {typ}");
+                    self.env.insert(res, typ);
+                }
+                Item::Mod(id, mexpr) => {
+                    log::trace!("mod {id}");
+                    self.infer_mod_expr(mexpr)?;
+                }
+            }
+        }
         log::block_out();
         log::trace!("}}");
         Ok(())
@@ -331,12 +341,12 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
                     let elem_typ = self.infer_expr(elem)?;
                     self.constrain(base_typ, elem_typ);
                 }
-                self.ctxt.typ(TyKind::Vector(base_typ), expr.span)
+                Ty::new(self.ctxt, TyKind::Vector(base_typ), expr.span)
             }
             ExprKind::Seq(e1, e2) => {
                 self.check_expr(
                     e1,
-                    self.ctxt.typ(TyKind::Base(BaseType::Unit), Span::dummy()),
+                    Ty::new(self.ctxt, TyKind::Base(BaseType::Unit), Span::dummy()),
                 )?;
                 self.infer_expr(e2)?
             }
@@ -354,7 +364,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             ExprKind::If(cond, then_expr, else_expr) => {
                 self.check_expr(
                     cond,
-                    self.ctxt.typ(TyKind::Base(BaseType::Bool), Span::dummy()),
+                    Ty::new(self.ctxt, TyKind::Base(BaseType::Bool), Span::dummy()),
                 )?;
                 let then_typ = self.infer_expr(then_expr)?;
                 let else_typ = self.infer_expr(else_expr)?;
@@ -385,34 +395,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
     /// Infer the type of a path by looking it up in the environment.
     fn infer_path(&mut self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let res = self.res[path.ast_id];
-        Ok(match self.env.get(&res) {
-            Some(typ) => *typ,
-            None => {
-                let typ = if let Some(cons) = self.res.constructors.get(&res) {
-                    cons.typ
-                } else {
-                    let value = self
-                        .res
-                        .values
-                        .get(&res)
-                        .unwrap_or_else(|| panic!("ICE: expected '{path}' to be lowered"));
-
-                    if value.recursive {
-                        self.fresh_var()
-                    } else {
-                        match value.typ {
-                            Some(typ) => {
-                                self.check_expr(value.expr, typ)?;
-                                typ
-                            }
-                            None => self.infer_expr(value.expr)?,
-                        }
-                    }
-                };
-                self.env.insert(res, typ);
-                typ
-            }
-        })
+        Ok(self.env[&res])
     }
 
     /// Infer a type for a pattern.

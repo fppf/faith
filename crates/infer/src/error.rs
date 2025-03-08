@@ -14,7 +14,6 @@ pub enum InferError<'t> {
     TypeUnifyFail(TypeUnifyError<'t>),
     ExprTupleLength(Span, usize, usize),
     PatTupleLength(Span, usize, usize),
-    Import(std::path::PathBuf, Diagnostic),
     ResidualConstraints(Vec<Constraint<'t>>),
 }
 
@@ -32,7 +31,6 @@ impl From<InferError<'_>> for Diagnostic {
                     "pattern tuple with length {l1} cannot be compared with a type tuple of length {l2}"
                 ))
                 .with_labels(vec![Label::new(p, format!("this pattern has length {l1}"))]),
-            InferError::Import(_, diag) => diag,
             InferError::ResidualConstraints(cts) => Diagnostic::new(Level::Error)
                 .with_message(format!("residual constraints: {}", cts.iter().format(", "))),
         }
@@ -57,6 +55,7 @@ impl<'t> From<TypeUnifyError<'t>> for Diagnostic {
                 ]),
             TypeUnifyError::Occurs(v, t) => Diagnostic::new(Level::Error)
                 .with_message(format!("unification variable {v} occurs inside type {t}")),
+            // FIXME spans
             TypeUnifyError::Length(l1, l2) => Diagnostic::new(Level::Error).with_message(format!(
                 "cannot unify type tuple of length {l1} with type tuple of length {l2}"
             )),

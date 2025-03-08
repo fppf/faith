@@ -32,14 +32,17 @@ impl Hash for Ty<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::{BaseType, TyCtxt, typ::TyKind};
+    use crate::{
+        BaseType, TyCtxt,
+        typ::{Ty, TyKind},
+    };
     use span::Span;
 
     #[test]
     fn equality() {
         let ctxt = TyCtxt::default();
-        let t1 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(0..1));
-        let t2 = ctxt.typ(TyKind::Base(BaseType::Unit), Span::from(1..2));
+        let t1 = Ty::new(&ctxt, TyKind::Base(BaseType::Unit), Span::from(0..1));
+        let t2 = Ty::new(&ctxt, TyKind::Base(BaseType::Unit), Span::from(1..2));
         assert_eq!(t1, t2);
     }
 }
@@ -270,7 +273,7 @@ impl<'t> Ty<'t> {
         if *self.kind() == kind {
             self
         } else {
-            f.ctxt().typ(kind, self.span())
+            Ty::new(f.ctxt(), kind, self.span())
         }
     }
 
@@ -278,18 +281,23 @@ impl<'t> Ty<'t> {
     where
         I: IntoIterator<Item = Self>,
     {
-        ctxt.typ(TyKind::Tuple(ctxt.arena.alloc_from_iter(iter)), span)
+        Ty::new(ctxt, TyKind::Tuple(ctxt.arena.alloc_from_iter(iter)), span)
     }
 
     pub fn app<I>(ctxt: &'t TyCtxt<'t>, head: Res, args: I, span: Span) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
-        ctxt.typ(TyKind::App(head, ctxt.arena.alloc_from_iter(args)), span)
+        Ty::new(
+            ctxt,
+            TyKind::App(head, ctxt.arena.alloc_from_iter(args)),
+            span,
+        )
     }
 
     pub fn arrow(ctxt: &'t TyCtxt<'t>, source: Self, target: Self) -> Self {
-        ctxt.typ(
+        Ty::new(
+            ctxt,
             TyKind::Arrow(source, target),
             source.span().merge(target.span()),
         )
@@ -307,19 +315,15 @@ impl<'t> Ty<'t> {
     }
 
     pub fn path(ctxt: &'t TyCtxt<'t>, res: Res, span: Span) -> Self {
-        ctxt.typ(TyKind::App(res, &[]), span)
+        Ty::new(ctxt, TyKind::App(res, &[]), span)
     }
 
     pub fn type_var(ctxt: &'t TyCtxt<'t>, var: TypeVar) -> Self {
-        ctxt.typ(TyKind::Var(var), var.name.span)
+        Ty::new(ctxt, TyKind::Var(var), var.name.span)
     }
 
     pub fn uni_var(ctxt: &'t TyCtxt<'t>, var: UniVar) -> Self {
-        ctxt.typ(TyKind::Uni(var), Span::dummy())
-    }
-
-    pub fn skolem(ctxt: &'t TyCtxt<'t>, skolem: Skolem) -> Self {
-        ctxt.typ(TyKind::Skolem(skolem), skolem.name.span)
+        Ty::new(ctxt, TyKind::Uni(var), Span::dummy())
     }
 
     pub fn eq_alpha(self, other: Self) -> bool {
