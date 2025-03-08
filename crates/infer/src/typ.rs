@@ -7,7 +7,7 @@ use base::{
 };
 use span::{Ident, Span};
 
-use crate::{TyCtxt, resolve::Res, substitution::Substitutable};
+use crate::{TyCtxt, resolve::Res};
 
 /// A representation of a type during type inference.
 // TODO. interning should canonicalize.
@@ -221,11 +221,18 @@ impl<'t> Ty<'t> {
     }
 
     #[inline]
-    pub fn span(&self) -> Span {
+    pub fn span(self) -> Span {
         self.1
     }
 
-    pub fn visit_with<V>(&self, v: &mut V)
+    pub fn as_var(self) -> Option<UniVarId> {
+        match self.kind() {
+            TyKind::Uni(var) => Some(var.id),
+            _ => None,
+        }
+    }
+
+    pub fn visit_with<V>(self, v: &mut V)
     where
         V: Visitor<Self>,
     {
@@ -315,7 +322,7 @@ impl<'t> Ty<'t> {
         ctxt.typ(TyKind::Skolem(skolem), skolem.name.span)
     }
 
-    pub fn eq_alpha(&self, other: Self) -> bool {
+    pub fn eq_alpha(self, other: Self) -> bool {
         #[derive(Default)]
         struct VarMap {
             uni_vars: Map<UniVarId, UniVarId>,
@@ -350,10 +357,10 @@ impl<'t> Ty<'t> {
             }
         }
 
-        go(&mut VarMap::default(), *self, other)
+        go(&mut VarMap::default(), self, other)
     }
 
-    pub fn uni_vars(&self) -> IndexSet<UniVar> {
+    pub fn uni_vars(self) -> IndexSet<UniVar> {
         #[derive(Default)]
         struct Vars {
             acc: IndexSet<UniVar>,
@@ -369,11 +376,11 @@ impl<'t> Ty<'t> {
         }
 
         let mut vars = Vars::default();
-        vars.visit(*self);
+        vars.visit(self);
         vars.acc
     }
 
-    pub fn type_vars(&self) -> Set<TypeVar> {
+    pub fn type_vars(self) -> Set<TypeVar> {
         #[derive(Default)]
         struct Vars {
             acc: Set<TypeVar>,
@@ -389,7 +396,7 @@ impl<'t> Ty<'t> {
         }
 
         let mut vars = Vars::default();
-        vars.visit(*self);
+        vars.visit(self);
         vars.acc
     }
 
@@ -417,35 +424,6 @@ impl<'t> Ty<'t> {
         }
 
         Subs { ctxt, var, typ }.fold(self)
-    }
-}
-
-impl<'t> Substitutable<'t> for Ty<'t> {
-    type Var = UniVarId;
-
-    fn as_var(&self) -> Option<Self::Var> {
-        match self.kind() {
-            TyKind::Uni(var) => Some(var.id),
-            _ => None,
-        }
-    }
-
-    fn make_var(ctxt: &'t TyCtxt<'t>, var: Self::Var) -> Self {
-        Ty::uni_var(ctxt, UniVar::new(var, Kind::new(0)))
-    }
-
-    fn visit_with<'a, V>(&self, v: &mut V)
-    where
-        V: Visitor<Self>,
-    {
-        self.visit_with(v);
-    }
-
-    fn fold_with<F>(self, f: &mut F) -> Self
-    where
-        F: Folder<'t, Self>,
-    {
-        self.fold_with(f)
     }
 }
 

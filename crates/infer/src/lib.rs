@@ -58,8 +58,8 @@ struct TypeChecker<'ast, 't> {
 
     type_var_src: TypeVarSource,
     skolem: SkolemId,
-    constraints: Vec<Constraint<'t, Ty<'t>>>,
-    subs: Substitution<'t, Ty<'t>>,
+    constraints: Vec<Constraint<'t>>,
+    subs: Substitution<'t>,
 }
 
 #[derive(Default)]

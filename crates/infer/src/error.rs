@@ -5,7 +5,7 @@ use span::{
 };
 
 use crate::{
-    constraint::{Constraint, UnifyError},
+    constraint::Constraint,
     resolve::Res,
     typ::{Ty, UniVarId},
 };
@@ -15,7 +15,7 @@ pub enum InferError<'t> {
     ExprTupleLength(Span, usize, usize),
     PatTupleLength(Span, usize, usize),
     Import(std::path::PathBuf, Diagnostic),
-    ResidualConstraints(Vec<Constraint<'t, Ty<'t>>>),
+    ResidualConstraints(Vec<Constraint<'t>>),
 }
 
 impl From<InferError<'_>> for Diagnostic {
@@ -44,16 +44,6 @@ pub enum TypeUnifyError<'t> {
     Occurs(UniVarId, Ty<'t>),
     Length(usize, usize),
     Lookup(Res),
-}
-
-impl<'t> UnifyError<'t, Ty<'t>> for TypeUnifyError<'t> {
-    fn length(lhs: usize, rhs: usize) -> Self {
-        Self::Length(lhs, rhs)
-    }
-
-    fn occurs(var: UniVarId, t: Ty<'t>) -> Self {
-        Self::Occurs(var, t)
-    }
 }
 
 impl<'t> From<TypeUnifyError<'t>> for Diagnostic {

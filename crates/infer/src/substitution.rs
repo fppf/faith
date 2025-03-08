@@ -11,9 +11,9 @@ use base::{
 };
 
 use crate::{
-    typ::{Folder, Visitor},
-    unify::{UnificationTable, UnifyKey, UnifyValue},
     TyCtxt,
+    typ::{Folder, Kind, Ty, UniVar, UniVarId, Visitor},
+    unify::{UnificationTable, UnifyKey, UnifyValue},
 };
 
 base::newtype_index! {
@@ -52,37 +52,21 @@ impl UnifyValue for Level {
     }
 }
 
-pub trait Substitutable<'t>: Copy + PartialEq + fmt::Display {
-    type Var: Idx + fmt::Display;
-
-    fn as_var(&self) -> Option<Self::Var>;
-
-    fn make_var(ctxt: &'t TyCtxt<'t>, var: Self::Var) -> Self;
-
-    fn visit_with<V>(&self, v: &mut V)
-    where
-        V: Visitor<Self>;
-
-    fn fold_with<F>(self, f: &mut F) -> Self
-    where
-        F: Folder<'t, Self>;
-}
-
-pub struct Substitution<'t, T: Substitutable<'t>> {
-    inner: RefCell<SubstitutionInner<'t, T>>,
+pub struct Substitution<'t> {
+    inner: RefCell<SubstitutionInner<'t>>,
     pub ctxt: &'t TyCtxt<'t>,
 }
 
-struct SubstitutionInner<'hir, T: Substitutable<'hir>> {
+struct SubstitutionInner<'t> {
     /// Stores the relationships of all variables in the substitution.
     union: UnificationTable<UnionByLevel>,
     /// Unification variables in the substitution, which can have a type
     /// written to them at most once.
-    variables: IndexVec<T::Var, T>,
-    types: Map<T::Var, OnceCell<T>>,
+    variables: IndexVec<UniVarId, Ty<'t>>,
+    types: Map<UniVarId, OnceCell<Ty<'t>>>,
 }
 
-impl<'t, T: Substitutable<'t>> fmt::Display for Substitution<'t, T> {
+impl fmt::Display for Substitution<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -101,7 +85,7 @@ impl<'t, T: Substitutable<'t>> fmt::Display for Substitution<'t, T> {
     }
 }
 
-impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
+impl<'t> Substitution<'t> {
     pub fn new(ctxt: &'t TyCtxt<'t>) -> Self {
         Self {
             inner: RefCell::new(SubstitutionInner {
@@ -113,39 +97,40 @@ impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
         }
     }
 
-    pub fn new_var(&self) -> (T::Var, T) {
+    pub fn new_var(&self) -> (UniVarId, Ty<'t>) {
         let mut inner = self.inner.borrow_mut();
         let len = inner.variables.len();
-        let var = inner
-            .variables
-            .push(T::make_var(self.ctxt, T::Var::new(len)));
+        let var = inner.variables.push(Ty::uni_var(
+            self.ctxt,
+            UniVar::new(UniVarId::new(len), Kind::new(0)),
+        ));
         inner.types.insert(var, OnceCell::new());
         let key = inner.union.new_key(Level::new(var.index()));
         assert_eq!(var.index(), key.index());
         (var, inner.variables[var])
     }
 
-    pub fn insert(&self, var: T::Var, t: T) {
+    pub fn insert(&self, var: UniVarId, ty: Ty<'t>) {
         let mut inner = self.inner.borrow_mut();
         let index = inner.union.find(UnionByLevel::new(var.index())).index();
-        let var = T::Var::new(index);
+        let var = UniVarId::new(index);
         match inner.types.get(&var) {
-            Some(slot) => match slot.set(t) {
+            Some(slot) => match slot.set(ty) {
                 Ok(()) => (),
-                Err(_) => panic!("overwrote {} with {t}", slot.get().unwrap()),
+                Err(_) => panic!("overwrote {} with {ty}", slot.get().unwrap()),
             },
             None => unreachable!(),
         }
     }
 
-    pub fn find(&self, var: T::Var) -> Option<T> {
+    pub fn find(&self, var: UniVarId) -> Option<Ty<'t>> {
         let mut inner = self.inner.borrow_mut();
         if var.index() >= inner.union.len() {
             return None;
         }
         let var_lvl = UnionByLevel::new(var.index());
         let index = inner.union.find(var_lvl).index();
-        let repr_var = T::Var::new(index);
+        let repr_var = UniVarId::new(index);
         inner
             .types
             .get(&repr_var)
@@ -159,14 +144,14 @@ impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
             })
     }
 
-    pub fn real(&self, t: T) -> T {
-        t.as_var().and_then(|v| self.find(v)).unwrap_or(t)
+    pub fn real(&self, ty: Ty<'t>) -> Ty<'t> {
+        ty.as_var().and_then(|v| self.find(v)).unwrap_or(ty)
     }
 
-    /// Update the substitution so that `var` has the same type as `t`.
-    pub fn union(&self, var: T, t: T) -> Result<(), (T::Var, T)> {
+    /// Update the substitution so that `var` has the same type as `ty`.
+    pub fn union(&self, var: Ty<'t>, ty: Ty<'t>) -> Result<(), (UniVarId, Ty<'t>)> {
         let var = var.as_var().expect("var is not a variable");
-        if let Some(other) = t.as_var() {
+        if let Some(other) = ty.as_var() {
             // If t is another var, union them by level.
             self.inner
                 .borrow_mut()
@@ -179,71 +164,71 @@ impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
         } else {
             // If t is not a variable, insert it into the substitution,
             // provided var does not occur in t.
-            if self.occurs(var, t) {
-                return Err((var, t));
+            if self.occurs(var, ty) {
+                return Err((var, ty));
             }
-            self.insert(var, t);
+            self.insert(var, ty);
         }
         Ok(())
     }
 
-    fn apply_once(&self, t: T) -> T {
-        struct Applier<'a, 't, T: Substitutable<'t>> {
-            subs: &'a Substitution<'t, T>,
+    fn apply_once(&self, ty: Ty<'t>) -> Ty<'t> {
+        struct Applier<'a, 't> {
+            subs: &'a Substitution<'t>,
         }
 
-        impl<'t, T: Substitutable<'t>> Folder<'t, T> for Applier<'_, 't, T> {
+        impl<'t> Folder<'t, Ty<'t>> for Applier<'_, 't> {
             fn ctxt(&self) -> &'t TyCtxt<'t> {
                 self.subs.ctxt
             }
 
-            fn fold(&mut self, t: T) -> T {
-                if t.as_var().is_some() {
-                    self.subs.real(t)
+            fn fold(&mut self, ty: Ty<'t>) -> Ty<'t> {
+                if ty.as_var().is_some() {
+                    self.subs.real(ty)
                 } else {
-                    t.fold_with(self)
+                    ty.fold_with(self)
                 }
             }
         }
 
-        Applier { subs: self }.fold(t)
+        Applier { subs: self }.fold(ty)
     }
 
-    pub fn apply(&self, mut t: T) -> T {
+    pub fn apply(&self, mut ty: Ty<'t>) -> Ty<'t> {
         // Apply substitution to fixed point.
         loop {
-            let old = t;
-            let new = self.apply_once(t);
-            t = new;
+            let old = ty;
+            let new = self.apply_once(ty);
+            ty = new;
             if new == old {
-                return t;
+                return ty;
             }
         }
     }
 
-    pub fn occurs(&self, var: T::Var, t: T) -> bool {
-        struct Occurs<'a, 'hir, T: Substitutable<'hir>> {
+    pub fn occurs(&self, var: UniVarId, ty: Ty<'t>) -> bool {
+        struct Occurs<'a, 't> {
             occurs: bool,
-            var: T::Var,
-            subs: &'a Substitution<'hir, T>,
+            var: UniVarId,
+            subs: &'a Substitution<'t>,
         }
 
-        impl<'hir, T: Substitutable<'hir>> Visitor<T> for Occurs<'_, 'hir, T> {
-            fn visit(&mut self, mut t: T) {
-                if let Some(other) = t.as_var() {
+        impl<'t> Visitor<Ty<'t>> for Occurs<'_, 't> {
+            fn visit(&mut self, mut ty: Ty<'t>) {
+                if let Some(other) = ty.as_var() {
                     if let Some(real) = self.subs.find(other) {
-                        t = real;
+                        ty = real;
                     } else {
                         if self.var == other {
                             self.occurs = true;
-                            t.visit_with(self);
+                            ty.visit_with(self);
                             return;
                         }
                         // NB. This makes occur-check side-effecting.
                         self.subs.update_level(self.var, other);
                     }
                 }
-                t.visit_with(self);
+                ty.visit_with(self);
             }
         }
 
@@ -252,11 +237,11 @@ impl<'t, T: Substitutable<'t>> Substitution<'t, T> {
             var,
             subs: self,
         };
-        occurs.visit(t);
+        occurs.visit(ty);
         occurs.occurs
     }
 
-    fn update_level(&self, var: T::Var, other: T::Var) {
+    fn update_level(&self, var: UniVarId, other: UniVarId) {
         let mut inner = self.inner.borrow_mut();
         let other_level = UnionByLevel::new(other.index());
         let level = inner
