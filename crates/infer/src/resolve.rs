@@ -3,10 +3,14 @@ use std::{
     collections::hash_map::Entry,
     fmt,
     hash::Hash,
+    marker::PhantomData,
     ops::{Index, IndexMut},
 };
 
-use base::{hash::Map, index::IndexVec};
+use base::{
+    hash::{Map, Set},
+    index::IndexVec,
+};
 use span::{
     Ident, SourceId, Sp, Span, Sym,
     diag::{Diagnostic, Label, Level},
@@ -73,11 +77,13 @@ pub fn resolve_program_in<'ast, 't>(
 }
 
 pub struct Resolution<'ast, 't> {
-    pub res: Map<AstId, Res>,
     pub last_res_id: ResId,
-    pub values: Map<Res, Value<'ast, 't>>,
-    pub constructors: Map<Res, Constructor<'t>>,
-    pub types: Map<Res, Ty<'t>>,
+    pub res: Map<AstId, Res>,
+    pub values: Map<ResId, Value<'t>>,
+    pub constructors: Map<ResId, Constructor<'t>>,
+    pub types: Map<ResId, Ty<'t>>,
+    pub variants: Map<ResId, Set<Res>>,
+    _marker: PhantomData<&'ast Expr<'ast>>,
 }
 
 impl<'ast, 't> Index<AstId> for Resolution<'ast, 't> {
@@ -131,8 +137,6 @@ impl From<ResolveError> for Diagnostic {
     }
 }
 
-type IdentMap<T> = Map<Ident, T>;
-
 base::newtype_index! {
     struct ModuleId {}
 }
@@ -140,18 +144,32 @@ base::newtype_index! {
 #[derive(Debug)]
 struct Module {
     kind: ModuleKind,
-    values: IdentMap<ResId>,
-    types: IdentMap<ResId>,
-    modules: IdentMap<ModuleId>,
+    values: Map<Ident, ResId>,
+    types: Map<Ident, ResId>,
+    children: Map<Ident, ModuleId>,
 }
 
 impl Module {
     fn new(kind: ModuleKind) -> Self {
         Self {
             kind,
-            values: IdentMap::default(),
-            types: IdentMap::default(),
-            modules: IdentMap::default(),
+            values: Map::default(),
+            types: Map::default(),
+            children: Map::default(),
+        }
+    }
+
+    fn get_res(&self, ns: Namespace, id: Ident) -> Option<Res> {
+        match ns {
+            Namespace::Value => self
+                .values
+                .get(&id)
+                .map(|&res_id| Res::Def(DefKind::Value, res_id)),
+            Namespace::Type => self
+                .types
+                .get(&id)
+                .map(|&res_id| Res::Def(DefKind::Type, res_id)),
+            Namespace::Mod => None,
         }
     }
 }
@@ -258,10 +276,9 @@ impl<K: Eq + Hash + Clone, V> ScopedMap<K, V> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Value<'ast, 't> {
+pub struct Value<'t> {
     pub recursive: bool,
     pub typ: Option<Ty<'t>>,
-    pub expr: &'ast Expr<'ast>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -284,7 +301,6 @@ struct Resolver<'ast, 't> {
 
     // Stack of modules we are in.
     module_stack: Vec<ModuleId>,
-    local_module_stack: Vec<Ident>,
 
     // Local bindings introduced by patterns.
     locals: ScopedMap<Ident, Res>,
@@ -301,16 +317,17 @@ impl<'ast, 't> Resolver<'ast, 't> {
             ctxt,
             program,
             res: Resolution {
-                res: Map::default(),
                 last_res_id: ResId::ZERO,
+                res: Map::default(),
                 values: Map::default(),
                 constructors: Map::default(),
                 types: Map::default(),
+                variants: Map::default(),
+                _marker: PhantomData,
             },
             modules,
             imports: Map::default(),
             module_stack: Vec::new(),
-            local_module_stack: Vec::new(),
             locals: ScopedMap::default(),
             current_module_id,
         }
@@ -331,11 +348,11 @@ impl<'ast, 't> Resolver<'ast, 't> {
     }
 
     fn current_module(&self) -> &Module {
-        self.modules.get(self.current_module_id).unwrap()
+        &self.modules[self.current_module_id]
     }
 
     fn current_module_mut(&mut self) -> &mut Module {
-        self.modules.get_mut(self.current_module_id).unwrap()
+        &mut self.modules[self.current_module_id]
     }
 
     fn current_comp_unit(&self) -> SourceId {
@@ -367,10 +384,11 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
     fn resolve_path(&mut self, ns: Namespace, path: Path<'ast>) -> Result<Res, ResolveError> {
         // If already resolved, reuse.
-        if let Some(&res) = self.res.res.get(&path.ast_id) {
-            return Ok(res);
-        }
+        // if let Some(&res) = self.res.res.get(&path.ast_id) {
+        //     return Ok(res);
+        // }
 
+        println!("resolve_path {path}");
         let res = self.resolve_path_inner(ns, path)?;
         self.res.res.insert(path.ast_id, res);
         Ok(res)
@@ -404,53 +422,45 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     // Don't cross pass compilation unit boundary.
                     break;
                 }
-                if let Some(&res_id) = module.values.get(&id.ident) {
-                    return Ok(Res::Def(DefKind::Value, res_id));
+                if let Some(res) = module.get_res(ns, id.ident) {
+                    return Ok(res);
                 }
             }
         }
 
         // Descend into the innermost module in the path prefix.
-        let mut curr = self.current_module();
+        let mut module = self.current_module();
         for segment in path.segments().take(path.access.len()) {
-            curr = curr
-                .modules
+            module = module
+                .children
                 .get(&segment)
                 .and_then(|&module_id| self.modules.get(module_id))
                 .ok_or(ResolveError::Resolve(path.to_string(), path.span()))?;
         }
-
-        if ns == Namespace::Value
-            && let Some(&res_id) = curr.values.get(&path.leaf())
-        {
-            return Ok(Res::Def(DefKind::Value, res_id));
-        }
-
-        if ns == Namespace::Type
-            && let Some(&res_id) = curr.types.get(&path.leaf())
-        {
-            return Ok(Res::Def(DefKind::Type, res_id));
-        }
-
-        Err(ResolveError::Resolve(path.to_string(), path.span()))
+        module
+            .get_res(ns, path.leaf())
+            .ok_or_else(|| ResolveError::Resolve(path.to_string(), path.span()))
     }
 
     fn resolve_comp_unit(&mut self, unit: &'ast CompUnit<'ast>) -> Result<ModuleId, ResolveError> {
-        let source_id = unit.source_id;
-        let module_id = self.modules.push(Module::new(ModuleKind::Unit(source_id)));
+        let module_id = self
+            .modules
+            .push(Module::new(ModuleKind::Unit(unit.source_id)));
         self.with_module(module_id, |self_| self_.resolve_items(unit.items))?;
         Ok(module_id)
     }
 
-    fn resolve_import(&mut self, id: Ident, source_id: SourceId) -> Result<ModuleId, ResolveError> {
+    fn resolve_import(
+        &mut self,
+        _id: Ident,
+        source_id: SourceId,
+    ) -> Result<ModuleId, ResolveError> {
         if let Some(&module_id) = self.imports.get(&source_id) {
             Ok(module_id)
         } else {
-            self.local_module_stack.push(id);
             log::trace!("resolve {:?}", source_id);
             let comp_unit = self.program.imports[&source_id];
             let module_id = self.resolve_comp_unit(comp_unit)?;
-            self.local_module_stack.pop();
             assert!(self.imports.insert(source_id, module_id).is_none());
             Ok(module_id)
         }
@@ -480,7 +490,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let res = Res::Def(DefKind::Value, res_id);
                 self.res.res.insert(ast_id, res);
 
-                // Insert hir_id into scope before resolving expr
+                // Insert res_id into scope before resolving expr
                 // to allow for recursive functions.
                 self.current_module_mut().values.insert(ident, res_id);
 
@@ -488,8 +498,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let value = if let ExprKind::External(_) = expr.kind {
                     Value {
                         recursive: false,
-                        typ: None, // FIXME
-                        expr,
+                        typ: Some(self.lower_type(typ.unwrap())?),
                     }
                 } else {
                     struct RecursiveVisitor<'a, 'ast, 't> {
@@ -501,23 +510,27 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                     impl<'ast, 't> AstVisitor<'ast> for RecursiveVisitor<'_, 'ast, 't> {
                         fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
+                            // N.B. we successfully resolved expr; a failed resolution
+                            //      will be a lambda parameter out of scope.
                             match expr.kind {
                                 ExprKind::Path(p) => {
-                                    let res =
-                                        self.resolver.resolve_path(Namespace::Value, p).unwrap();
-                                    self.recursive_value = res.res_id() == self.res_id;
+                                    if let Ok(res) = self.resolver.resolve_path(Namespace::Value, p)
+                                    {
+                                        self.recursive_value = res.res_id() == self.res_id;
+                                        return;
+                                    }
                                 }
-                                ExprKind::Call(e, _) => {
-                                    if let ExprKind::Path(p) = e.kind {
-                                        let res = self
-                                            .resolver
-                                            .resolve_path(Namespace::Value, p)
-                                            .unwrap();
+                                ExprKind::Call(f, _) => {
+                                    if let ExprKind::Path(p) = f.kind
+                                        && let Ok(res) =
+                                            self.resolver.resolve_path(Namespace::Value, p)
+                                    {
                                         self.recursive_function = res.res_id() == self.res_id;
                                     }
                                 }
-                                _ => expr.visit_with(self),
+                                _ => (),
                             }
+                            expr.visit_with(self);
                         }
                     }
 
@@ -536,29 +549,31 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                     Value {
                         recursive: recursive_visitor.recursive_function,
-                        expr,
-                        typ: None, // FIXME
+                        typ: if let Some(typ) = typ {
+                            Some(self.lower_type(typ)?)
+                        } else {
+                            None
+                        },
                     }
                 };
-                self.res.values.insert(res, value);
+                self.res.values.insert(res_id, value);
+                log::trace!("{ident} => {res_id}");
             }
             Item::Mod(id, mexpr) => {
                 seen.update(Namespace::Mod, id.ident)?;
                 match mexpr.value {
-                    ModExpr::Path(_p) => todo!(),
+                    ModExpr::Path(_p) => todo!("implement module aliases"),
                     ModExpr::Struct(items) => {
                         let module_id = self.modules.push(Module::new(ModuleKind::Inline));
                         self.current_module_mut()
-                            .modules
+                            .children
                             .insert(id.ident, module_id);
-                        self.local_module_stack.push(id.ident);
                         self.with_module(module_id, |self_| self_.resolve_items(items))?;
-                        self.local_module_stack.pop();
                     }
                     ModExpr::Import(path) => {
                         let module_id = self.resolve_import(id.ident, path)?;
                         self.current_module_mut()
-                            .modules
+                            .children
                             .insert(id.ident, module_id);
                     }
                 }
@@ -572,65 +587,53 @@ impl<'ast, 't> Resolver<'ast, 't> {
         group: &'ast [TypeDecl<'ast>],
         seen: &mut Seen,
     ) -> Result<(), ResolveError> {
-        // Update seen before resolving decls to allow recursive decls.
+        // Must be done first to permit recursive type decls.
+        let mut decl_res = Vec::with_capacity(group.len());
         for decl in group {
             seen.update(Namespace::Type, decl.id.ident)?;
+            let res = Res::Def(DefKind::Type, self.new_res_id());
+            decl_res.push(res);
+            self.current_module_mut()
+                .types
+                .insert(decl.id.ident, res.res_id());
         }
-        for decl in group {
-            self.resolve_type_decl(decl, seen)?;
-        }
-        Ok(())
-    }
+        for (decl, res) in group.iter().zip(decl_res) {
+            match decl.kind {
+                TypeDeclKind::Alias(typ) => {
+                    let typ = self.lower_type(typ)?;
+                    self.res.types.insert(res.res_id(), typ);
+                }
+                TypeDeclKind::Variant(variants) => {
+                    let typ = Ty::app(
+                        self.ctxt,
+                        res,
+                        decl.vars
+                            .iter()
+                            .map(|id| Ty::type_var(self.ctxt, TypeVar::new(id.ident))),
+                        decl.span,
+                    );
+                    for &(id, args) in variants {
+                        seen.update(Namespace::Value, id.ident)?;
+                        let cons_res_id = self.new_res_id();
+                        self.current_module_mut()
+                            .values
+                            .insert(id.ident, cons_res_id);
 
-    fn resolve_type_decl(
-        &mut self,
-        decl: &'ast TypeDecl<'ast>,
-        seen: &mut Seen,
-    ) -> Result<(), ResolveError> {
-        let vars = self
-            .ctxt
-            .arena
-            .alloc_from_iter(decl.vars.iter().map(|&id| TypeVar::new(id.ident)));
-        let res_id = self.new_res_id();
-        let res = Res::Def(DefKind::Type, res_id);
-
-        match decl.kind {
-            TypeDeclKind::Alias(typ) => {
-                let typ = self.lower_type(typ)?;
-                //FIXME self.ctxt.set_type(res_id, typ);
-            }
-            TypeDeclKind::Variant(variants) => {
-                let typ = Ty::app(
-                    self.ctxt,
-                    res,
-                    vars.iter().map(|&v| Ty::type_var(self.ctxt, v)),
-                    decl.span,
-                );
-                //FIXME self.ctxt.set_type(res_id, typ);
-                // let mut constructors = Set::default();
-                // for &(id, args) in variants {
-                //     let mut new_args = Vec::with_capacity(args.len());
-                //     for arg in args {
-                //         new_args.push(self.lower_type_unscoped(arg)?);
-                //     }
-                //     let cons_typ = Ty::n_arrow(self.ctxt, new_args.iter().copied(), typ);
-                //     seen.update(Namespace::Value, id.ident)?;
-                //     let cons_res_id = self.ctxt.new_res_id();
-                //     constructors.insert(cons_res_id);
-                //     self.current_module_mut()
-                //         .values
-                //         .insert(id.ident, cons_res_id);
-                //     self.constructors.insert(
-                //         cons_res_id,
-                //         Constructor {
-                //             id: id.ident,
-                //             typ: cons_typ,
-                //             arity: new_args.len(),
-                //             decl: res_id,
-                //         },
-                //     );
-                //     //FIXME self.ctxt.set_type(cons_res_id, cons_typ);
-                // }
+                        let mut new_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            new_args.push(self.lower_type_unscoped(arg)?);
+                        }
+                        self.res.constructors.insert(
+                            cons_res_id,
+                            Constructor {
+                                id: id.ident,
+                                typ: Ty::n_arrow(self.ctxt, new_args.iter().copied(), typ),
+                                arity: new_args.len(),
+                                decl: res,
+                            },
+                        );
+                    }
+                }
             }
         }
         Ok(())
@@ -676,7 +679,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 }
                 Ty::app(self.ctxt, res, args, typ.span())
             }
-            Type::Row(..) => todo!("record types"),
+            Type::Row(..) => todo!("implement record types"),
         };
         Ok(ty)
     }
@@ -686,8 +689,10 @@ impl<'ast, 't> Resolver<'ast, 't> {
             PatKind::Wild => Ok(()),
             PatKind::Lit(l) => wf_lit(l, pat.span),
             PatKind::Var(id) => {
-                let res_id = self.new_res_id();
-                self.locals.insert(id.ident, Res::Local(res_id));
+                let res = Res::Local(self.new_res_id());
+                self.locals.insert(id.ident, res);
+                log::trace!("[local] {} => {}", id.ident, res.res_id());
+                self.res.res.insert(id.ast_id, res);
                 Ok(())
             }
             PatKind::Ann(p, _t) => self.resolve_pat(p),
@@ -716,7 +721,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 Ok(())
             }
             ExprKind::Lambda(l) => {
-                self.check_duplicates_group(l.args)?;
+                self.check_duplicates_many(l.args)?;
                 self.with_local_scope(|self_| {
                     self_.resolve_pats(l.args)?;
                     self_.resolve_expr(l.body)
@@ -724,7 +729,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
             }
             ExprKind::Let(binds, body) => self.with_local_scope(|self_| {
                 for bind in binds.iter() {
-                    self_.check_duplicates_one(&bind.0)?;
+                    self_.check_duplicates(&bind.0)?;
                     self_.resolve_pat(&bind.0)?;
                     self_.resolve_expr(&bind.1)?;
                 }
@@ -733,7 +738,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
             ExprKind::Case(e, arms) => {
                 self.resolve_expr(e)?;
                 for arm in arms.iter() {
-                    self.check_duplicates_one(&arm.0)?;
+                    self.check_duplicates(&arm.0)?;
                     self.with_local_scope(|self_| {
                         self_.resolve_pat(&arm.0)?;
                         self_.resolve_expr(&arm.1)
@@ -817,13 +822,13 @@ impl<'ast> AstVisitor<'ast> for Duplicates {
 }
 
 impl<'ast> Resolver<'ast, '_> {
-    fn check_duplicates_one(&self, pat: &'ast Pat<'ast>) -> Result<(), ResolveError> {
+    fn check_duplicates(&self, pat: &'ast Pat<'ast>) -> Result<(), ResolveError> {
         let mut dups = Duplicates::default();
         dups.visit_pat(pat);
         dups.check()
     }
 
-    fn check_duplicates_group(&self, pats: &'ast [Pat<'ast>]) -> Result<(), ResolveError> {
+    fn check_duplicates_many(&self, pats: &'ast [Pat<'ast>]) -> Result<(), ResolveError> {
         let mut dups = Duplicates::default();
         for pat in pats {
             dups.visit_pat(pat);

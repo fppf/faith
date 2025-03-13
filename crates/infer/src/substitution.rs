@@ -54,7 +54,7 @@ impl UnifyValue for Level {
 
 pub struct Substitution<'t> {
     inner: RefCell<SubstitutionInner<'t>>,
-    pub ctxt: &'t TyCtxt<'t>,
+    ctxt: &'t TyCtxt<'t>,
 }
 
 struct SubstitutionInner<'t> {

@@ -40,15 +40,21 @@ pub fn infer_program_in<'ast, 't>(
     program: &'ast Program<'ast>,
 ) -> Result<(), Diagnostic> {
     let res = resolve::resolve_program_in(ctxt, program)?;
-    TypeChecker::new(ctxt, program, &res)
+    Infer::new(ctxt, program, &res)
         .infer()
         .map_err(Diagnostic::from)
 }
 
-struct TypeChecker<'ast, 't> {
+#[derive(Default)]
+struct Environment<'t> {
+    res: Map<Res, Ty<'t>>,
+    ast: Map<AstId, Ty<'t>>,
+}
+
+struct Infer<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-    env: Map<Res, Ty<'t>>,
+    env: Environment<'t>,
     res: &'t Resolution<'ast, 't>,
 
     type_var_src: TypeVarSource,
@@ -75,7 +81,7 @@ impl TypeVarSource {
     }
 }
 
-impl<'ast, 't> TypeChecker<'ast, 't> {
+impl<'ast, 't> Infer<'ast, 't> {
     fn new(
         ctxt: &'t TyCtxt<'t>,
         program: &'ast Program<'ast>,
@@ -85,7 +91,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             ctxt,
             program,
             res,
-            env: Map::default(),
+            env: Environment::default(),
             type_var_src: TypeVarSource::default(),
             skolem: SkolemId::ZERO,
             constraints: Vec::new(),
@@ -237,8 +243,10 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
                     let value = self
                         .res
                         .values
-                        .get(&res)
-                        .unwrap_or_else(|| panic!("ICE: expected '{id}' to be lowered"));
+                        .get(&res.res_id())
+                        .unwrap_or_else(|| panic!("ICE: expected '{id}' to be resolved"));
+
+                    println!("{id} {expr:?} {:?}", value.typ);
 
                     let typ = if value.recursive {
                         self.fresh_var()
@@ -253,7 +261,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
                         }
                     };
                     log::trace!("{id} : {typ}");
-                    self.env.insert(res, typ);
+                    self.env.res.insert(res, typ);
                 }
                 Item::Mod(id, mexpr) => {
                     log::trace!("mod {id}");
@@ -372,8 +380,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
                 then_typ
             }
         };
-        let res = self.res[expr.ast_id];
-        self.env.insert(res, typ);
+        self.env.ast.insert(expr.ast_id, typ);
         Ok(typ)
     }
 
@@ -395,7 +402,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
     /// Infer the type of a path by looking it up in the environment.
     fn infer_path(&mut self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let res = self.res[path.ast_id];
-        Ok(self.env[&res])
+        Ok(self.env.res[&res])
     }
 
     /// Infer a type for a pattern.
@@ -405,7 +412,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             PatKind::Var(id) => {
                 let var = self.fresh_var();
                 let res = self.res[id.ast_id];
-                self.env.insert(res, var);
+                self.env.res.insert(res, var);
                 var
             }
             PatKind::Lit(l) => self.type_from_lit(l, pat.span),
@@ -430,8 +437,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
         };
-        let res = self.res[pat.ast_id];
-        self.env.insert(res, typ);
+        self.env.ast.insert(pat.ast_id, typ);
         Ok(typ)
     }
 
@@ -538,7 +544,7 @@ impl<'ast, 't> TypeChecker<'ast, 't> {
             (PatKind::Wild, _) => (),
             (PatKind::Var(path), _) => {
                 let res = self.res[path.ast_id];
-                self.env.insert(res, expected);
+                self.env.res.insert(res, expected);
             }
             (PatKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {

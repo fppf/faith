@@ -4,13 +4,13 @@ use base::hash::IndexSet;
 use span::Span;
 
 use crate::{
-    TypeChecker,
+    Infer,
     error::TypeUnifyError,
     typ::{Ty, TyKind},
 };
 
 pub fn solve<'t>(
-    tc: &mut TypeChecker<'_, 't>,
+    tc: &mut Infer<'_, 't>,
     constraints: Vec<Constraint<'t>>,
 ) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
     let mut solver = Solver::default();
@@ -69,7 +69,7 @@ impl<'t> Constraint<'t> {
     }
 }
 
-impl<'t> TypeChecker<'_, 't> {
+impl<'t> Infer<'_, 't> {
     fn try_unify(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), TypeUnifyError<'t>> {
         let lhs = self.subs.real(lhs);
         let rhs = self.subs.real(rhs);
@@ -111,8 +111,8 @@ impl<'t> TypeChecker<'_, 't> {
                 self.try_unify(l_ret, r_ret)
             }
             (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
-                let l_h = self.env.get(&l_h).ok_or(TypeUnifyError::Lookup(l_h))?;
-                let r_h = self.env.get(&r_h).ok_or(TypeUnifyError::Lookup(r_h))?;
+                let l_h = self.env.res.get(&l_h).ok_or(TypeUnifyError::Lookup(l_h))?;
+                let r_h = self.env.res.get(&r_h).ok_or(TypeUnifyError::Lookup(r_h))?;
                 self.try_unify(*l_h, *r_h)?;
                 self.zip_unify(l_args, r_args)
             }
@@ -357,10 +357,7 @@ struct Solver<'t> {
 }
 
 impl<'t> Solver<'t> {
-    fn solve(
-        mut self,
-        tc: &mut TypeChecker<'_, 't>,
-    ) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
+    fn solve(mut self, tc: &mut Infer<'_, 't>) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
         while self.step(tc) {
             // step
         }
@@ -375,7 +372,7 @@ impl<'t> Solver<'t> {
         Ok(self.work_list.into_constraints())
     }
 
-    fn step(&mut self, tc: &TypeChecker<'_, 't>) -> bool {
+    fn step(&mut self, tc: &Infer<'_, 't>) -> bool {
         if let Some(ct) = self.work_list.pop() {
             let mut react_products = Vec::new();
 
