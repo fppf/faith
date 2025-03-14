@@ -160,20 +160,12 @@ impl ParseError {
             span,
         }
     }
-
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn span(&self) -> Span {
-        self.span
-    }
 }
 
 impl From<ParseError> for Diagnostic {
     fn from(e: ParseError) -> Self {
         Self::new(Level::Error)
-            .with_message(e.text())
-            .with_labels(vec![Label::new(e.span(), "").primary()])
+            .with_message(e.text)
+            .with_labels(vec![Label::new(e.span, "").primary()])
     }
 }

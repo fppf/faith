@@ -2,36 +2,21 @@
 #![feature(let_chains)]
 
 use base::hash::Map;
-use resolve::{Res, Resolution};
 use span::{Ident, Sp, Span, Sym, diag::Diagnostic};
 use syntax::ast::*;
 
-mod constraint;
+mod error;
+mod resolve;
 mod substitution;
-mod ty;
 mod unify;
 
-pub mod error;
-pub mod resolve;
-
-use constraint::{Constraint, WorkList};
 use error::InferError;
 use substitution::Substitution;
-use ty::{Skolem, SkolemId, Ty, TyKind, TypeFolder, TypeVar};
+use ty::{Skolem, SkolemId, Ty, TyCtxt, TyKind, TypeFolder, TypeVar};
+use unify::Origin;
 
-base::declare_arena!('t, []);
-
-pub struct TyCtxt<'t> {
-    pub arena: Arena<'t>,
-}
-
-impl Default for TyCtxt<'_> {
-    fn default() -> Self {
-        Self {
-            arena: Arena::default(),
-        }
-    }
-}
+pub mod ty;
+pub use resolve::{Constructor, Res, ResId, Resolution, Value};
 
 pub fn infer_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
@@ -52,12 +37,13 @@ struct Environment<'t> {
 struct Infer<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-    env: Environment<'t>,
     res: &'t Resolution<'ast, 't>,
-
-    skolem: SkolemId,
-    constraints: WorkList<'t>,
+    env: Environment<'t>,
     subs: Substitution<'t>,
+
+    bool_ty: Ty<'t>,
+    unit_ty: Ty<'t>,
+    skolem: SkolemId,
 }
 
 impl<'ast, 't> Infer<'ast, 't> {
@@ -71,36 +57,32 @@ impl<'ast, 't> Infer<'ast, 't> {
             program,
             res,
             env: Environment::default(),
-            skolem: SkolemId::ZERO,
-            constraints: WorkList::default(),
             subs: Substitution::new(ctxt),
+
+            bool_ty: Ty::new(ctxt, TyKind::Base(BaseType::Bool)),
+            unit_ty: Ty::new(ctxt, TyKind::Base(BaseType::Unit)),
+            skolem: SkolemId::ZERO,
         }
     }
 
     fn infer(mut self) -> Result<(), InferError<'t>> {
         self.infer_comp_unit(self.program.unit)?;
-        self.infer_solve_expr(self.program.main)?;
+        self.infer_expr(self.program.main)?;
         Ok(())
     }
 
-    fn type_from_lit(&self, lit: Lit, span: Span) -> Ty<'t> {
-        Ty::new(self.ctxt, TyKind::Base(lit.base_type()), span)
-    }
-
-    fn constrain(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) {
-        //log::trace!("{lhs} ~ {rhs}");
-        self.constraints
-            .extend(self.canonicalize(Constraint::equal(lhs, rhs)));
+    fn type_from_lit(&self, lit: Lit) -> Ty<'t> {
+        Ty::new(self.ctxt, TyKind::Base(lit.base_type()))
     }
 
     fn fresh_var(&self) -> Ty<'t> {
-        self.subs.new_var().1
+        self.subs.new_var()
     }
 
     /// Generalize a type over its unification variables.
     ///
     /// For example, `generalize('1 -> '1) = 'a -> 'a`.
-    fn generalize(&mut self, typ: Ty<'t>) -> Ty<'t> {
+    fn generalize(&self, ty: Ty<'t>) -> Ty<'t> {
         let mut char_count = 0;
         let mut fresh = || {
             let ch = (b'a' + char_count) as char;
@@ -108,30 +90,30 @@ impl<'ast, 't> Infer<'ast, 't> {
             let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
             TypeVar::new(id)
         };
-        let typ = self.subs.apply(typ);
-        let free_vars = typ.uni_vars();
+        let ty = self.subs.apply(ty);
+        let free_vars = ty.uni_vars();
         if !free_vars.is_empty() {
             for var in free_vars {
                 self.subs.insert(var.id, Ty::type_var(self.ctxt, fresh()));
             }
-            self.subs.apply(typ)
+            self.subs.apply(ty)
         } else {
-            typ
+            ty
         }
     }
 
-    fn instantiate(&mut self, typ: Ty<'t>) -> Ty<'t> {
-        struct Instantiator<'a> {
-            ctxt: &'a TyCtxt<'a>,
-            subs: Map<Ident, Ty<'a>>,
+    fn instantiate(&self, ty: Ty<'t>) -> Ty<'t> {
+        struct Instantiator<'t> {
+            ctxt: &'t TyCtxt<'t>,
+            subs: Map<Ident, Ty<'t>>,
         }
 
-        impl<'a> TypeFolder<'a> for Instantiator<'a> {
-            fn ctxt(&self) -> &'a TyCtxt<'a> {
+        impl<'t> TypeFolder<'t> for Instantiator<'t> {
+            fn ctxt(&self) -> &'t TyCtxt<'t> {
                 self.ctxt
             }
 
-            fn fold(&mut self, ty: Ty<'a>) -> Ty<'a> {
+            fn fold(&mut self, ty: Ty<'t>) -> Ty<'t> {
                 if let TyKind::Var(var) = ty.kind()
                     && let Some(&other) = self.subs.get(&var.name)
                 {
@@ -144,13 +126,13 @@ impl<'ast, 't> Infer<'ast, 't> {
 
         Instantiator {
             ctxt: self.ctxt,
-            subs: typ
+            subs: ty
                 .type_vars()
                 .iter()
                 .map(|&var| (var.name, self.fresh_var()))
                 .collect(),
         }
-        .fold(typ)
+        .fold(ty)
     }
 
     fn fresh_skolem(&mut self) -> SkolemId {
@@ -159,54 +141,36 @@ impl<'ast, 't> Infer<'ast, 't> {
         id
     }
 
-    fn _skolemize(&mut self, typ: Ty<'t>) -> Ty<'t> {
-        struct SkolemReplacer<'a> {
+    fn skolemize(&mut self, ty: Ty<'t>) -> Ty<'t> {
+        struct SkolemReplacer<'t> {
             skolems: Map<TypeVar, Skolem>,
-            ctxt: &'a TyCtxt<'a>,
+            ctxt: &'t TyCtxt<'t>,
         }
 
-        impl<'a> TypeFolder<'a> for SkolemReplacer<'a> {
-            fn ctxt(&self) -> &'a TyCtxt<'a> {
+        impl<'t> TypeFolder<'t> for SkolemReplacer<'t> {
+            fn ctxt(&self) -> &'t TyCtxt<'t> {
                 self.ctxt
             }
 
-            fn fold(&mut self, ty: Ty<'a>) -> Ty<'a> {
+            fn fold(&mut self, ty: Ty<'t>) -> Ty<'t> {
                 if let TyKind::Var(var) = ty.kind() {
                     let skolem = self.skolems[var];
-                    Ty::new(self.ctxt(), TyKind::Skolem(skolem), skolem.name.span)
+                    Ty::new(self.ctxt(), TyKind::Skolem(skolem))
                 } else {
                     ty.fold_with(self)
                 }
             }
         }
 
-        let skolems = typ
-            .type_vars()
-            .iter()
-            .map(|&var| (var, Skolem::new(self.fresh_skolem(), var.name)))
-            .collect();
-
         SkolemReplacer {
             ctxt: self.ctxt,
-            skolems,
+            skolems: ty
+                .type_vars()
+                .iter()
+                .map(|&var| (var, Skolem::new(self.fresh_skolem(), var.name)))
+                .collect(),
         }
-        .fold(typ)
-    }
-
-    fn solve_current(&mut self) -> Result<(), InferError<'t>> {
-        let residual = self.solve().map_err(InferError::TypeUnifyFail)?;
-        if residual.is_empty() {
-            Ok(())
-        } else {
-            Err(InferError::ResidualConstraints(residual))
-        }
-    }
-
-    fn infer_solve_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let res = self.infer_expr(expr)?;
-        self.solve_current()?;
-        let res = self.generalize(res);
-        Ok(res)
+        .fold(ty)
     }
 
     fn infer_comp_unit(&mut self, unit: &'ast CompUnit<'ast>) -> Result<(), InferError<'t>> {
@@ -219,26 +183,45 @@ impl<'ast, 't> Infer<'ast, 't> {
         for item in items {
             match item.value {
                 Item::Type(..) => (),
-                Item::Value(id, _, expr) => {
+                Item::Value(id, ast_ty, expr) => {
                     let res = self.res[id.ast_id];
                     let value =
                         self.res.values.get(&res.res_id()).unwrap_or_else(|| {
                             panic!("ICE: expected '{id}' to be resolved to {res}")
                         });
-                    let typ = if value.recursive {
+                    let ty = if value.recursive {
+                        // FIXME
                         self.fresh_var()
                     } else {
-                        match value.typ {
-                            Some(typ) => {
-                                self.check_expr(expr, typ)?;
-                                self.solve_current()?;
-                                typ
+                        match value.ty {
+                            Some(ty) => {
+                                // Suppose we have a silly declaration like val id x : 'a -> 'a = ().
+                                //
+                                // Without skolemization of 'a -> 'a, we have the following:
+                                //
+                                //   ('0 -> ()) ~ ('a -> 'a) -- infer \x -> () and equate with 'a -> 'a
+                                //   ('0 -> ()) ~ ('1 -> '1) -- instantiate 'a -> 'a to '1 -> '1
+                                //   ('0 ~ '1) /\ (() ~ '1)  -- destruct arrow
+                                //
+                                // ==> '0 == '1 == (), and we succeed...oops.
+                                //
+                                // With skolemization of 'a -> 'a to #'a -> #'a, #'a cannot unify with ().
+                                let skol_ty = self.skolemize(ty);
+                                self.check_expr(
+                                    expr,
+                                    skol_ty,
+                                    Origin::Generic(expr.span, ast_ty.unwrap().span()),
+                                )?;
+                                ty
                             }
-                            None => self.infer_solve_expr(expr)?,
+                            None => {
+                                let ty = self.infer_expr(expr)?;
+                                self.generalize(ty)
+                            }
                         }
                     };
-                    log::trace!("{id} : {typ}");
-                    self.env.res.insert(res, typ);
+                    log::trace!("{id} : {ty}");
+                    self.env.res.insert(res, ty);
                 }
                 Item::Mod(id, mexpr) => {
                     log::trace!("mod {id}");
@@ -268,12 +251,8 @@ impl<'ast, 't> Infer<'ast, 't> {
         }
     }
 
-    // fn _infer_decl_group(&mut self, _group: TypeDeclGroup<'ast>) -> Result<(), InferError<'t>> {
-    //     todo!()
-    // }
-
     fn infer_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let typ = match expr.kind {
+        let ty = match expr.kind {
             // NB. Applications are either function calls (such as `(f a b ...)`)
             //     or "0-arity" applications, i.e., paths.
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
@@ -282,109 +261,113 @@ impl<'ast, 't> Infer<'ast, 't> {
                     ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[] as &[_]),
                     _ => unreachable!(),
                 };
-                let head_typ = match head.kind {
-                    ExprKind::Path(p) | ExprKind::Constructor(p) => self.infer_path(p),
+                let mut ty = match head.kind {
+                    ExprKind::Path(p) => self.infer_path(p),
+                    ExprKind::Constructor(p) => self.infer_constructor(p),
                     _ => self.infer_expr(head),
                 }?;
-                let mut typ = self.instantiate(head_typ);
                 for arg in args {
-                    if let TyKind::Arrow(arg_typ, ret_typ) = *typ.kind() {
-                        self.check_expr(arg, arg_typ)?;
-                        typ = ret_typ;
+                    if let TyKind::Arrow(arg_ty, ret_ty) = *ty.kind() {
+                        self.check_expr(arg, arg_ty, Origin::Generic(arg.span, arg.span))?;
+                        ty = ret_ty;
                     } else {
                         break;
                     }
                 }
-                typ
+                ty
             }
             ExprKind::External(_) => unreachable!(),
-            ExprKind::Lit(l) => self.type_from_lit(l, expr.span),
-            ExprKind::Lambda(lambda) => self.infer_lambda(lambda.args, lambda.body)?,
+            ExprKind::Lit(l) => self.type_from_lit(l),
+            ExprKind::Lambda(lambda) => {
+                let arg_tys = self.infer_pats(lambda.args)?;
+                let body_ty = self.infer_expr(lambda.body)?;
+                Ty::n_arrow(self.ctxt, arg_tys, body_ty)
+            }
             ExprKind::Let(binds, body) => {
-                for bind in binds {
-                    let pat_typ = self.infer_pat(&bind.0)?;
-                    let bind_typ = self.infer_expr(&bind.1)?;
-                    self.constrain(pat_typ, bind_typ);
+                for (pat, bind) in binds {
+                    let pat_ty = self.infer_pat(pat)?;
+                    let bind_ty = self.infer_expr(bind)?;
+                    self.eq(Origin::Generic(pat.span, bind.span), pat_ty, bind_ty)?;
                 }
                 self.infer_expr(body)?
             }
-            ExprKind::Ann(expr, typ) => {
-                //FIXME self.check_expr(expr, typ)?;
-                //typ
-                todo!()
+            ExprKind::Ann(e, t) => {
+                let expected = self.res.annotations[&expr.ast_id];
+                let expected = self.skolemize(expected);
+                self.check_expr(e, expected, Origin::Generic(e.span, t.span))?;
+                expected
             }
             ExprKind::Tuple(elems) => {
-                let mut typs = Vec::with_capacity(elems.len());
+                let mut tys = Vec::with_capacity(elems.len());
                 for elem in elems {
-                    typs.push(self.infer_expr(elem)?);
+                    tys.push(self.infer_expr(elem)?);
                 }
-                Ty::tuple(self.ctxt, typs, expr.span)
+                Ty::tuple(self.ctxt, tys)
             }
             ExprKind::Vector(elems) => {
-                let base_typ = self.fresh_var();
+                let vector_base_ty = self.fresh_var();
                 for elem in elems {
-                    let elem_typ = self.infer_expr(elem)?;
-                    self.constrain(base_typ, elem_typ);
+                    let elem_ty = self.infer_expr(elem)?;
+                    self.eq(
+                        Origin::Vector {
+                            vector_span: expr.span,
+                            elem_span: elem.span,
+                        },
+                        vector_base_ty,
+                        elem_ty,
+                    )?;
                 }
-                Ty::new(self.ctxt, TyKind::Vector(base_typ), expr.span)
+                Ty::new(self.ctxt, TyKind::Vector(vector_base_ty))
             }
             ExprKind::Seq(e1, e2) => {
-                self.check_expr(
-                    e1,
-                    Ty::new(self.ctxt, TyKind::Base(BaseType::Unit), Span::dummy()),
-                )?;
+                self.check_expr(e1, self.unit_ty, Origin::Seq(e1.span))?;
                 self.infer_expr(e2)?
             }
             ExprKind::Case(scrutinee, arms) => {
-                let typ = self.infer_expr(scrutinee)?;
+                let scrutinee_ty = self.infer_expr(scrutinee)?;
                 let var = self.fresh_var();
-                for arm in arms {
-                    let pat_typ = self.infer_pat(&arm.0)?;
-                    self.constrain(typ, pat_typ);
-                    let arm_typ = self.infer_expr(&arm.1)?;
-                    self.constrain(var, arm_typ);
+                for (pat, arm) in arms {
+                    let pat_ty = self.infer_pat(pat)?;
+                    self.eq(
+                        Origin::Generic(scrutinee.span, pat.span),
+                        scrutinee_ty,
+                        pat_ty,
+                    )?;
+                    let arm_ty = self.infer_expr(arm)?;
+                    self.eq(Origin::Generic(expr.span, arm.span), var, arm_ty)?;
                 }
                 var
             }
             ExprKind::If(cond, then_expr, else_expr) => {
-                self.check_expr(
-                    cond,
-                    Ty::new(self.ctxt, TyKind::Base(BaseType::Bool), Span::dummy()),
+                self.check_expr(cond, self.bool_ty, Origin::If(cond.span))?;
+                let then_ty = self.infer_expr(then_expr)?;
+                let else_ty = self.infer_expr(else_expr)?;
+                self.eq(
+                    Origin::Generic(then_expr.span, else_expr.span),
+                    then_ty,
+                    else_ty,
                 )?;
-                let then_typ = self.infer_expr(then_expr)?;
-                let else_typ = self.infer_expr(else_expr)?;
-                self.constrain(then_typ, else_typ);
-                then_typ
+                then_ty
             }
         };
-        self.env.ast.insert(expr.ast_id, typ);
-        Ok(typ)
-    }
-
-    /// Infer the type of a lambda expression `(\args -> body)`.
-    fn infer_lambda(
-        &mut self,
-        args: &'ast [Pat<'ast>],
-        body: &'ast Expr<'ast>,
-    ) -> Result<Ty<'t>, InferError<'t>> {
-        if let Some((first, rest)) = args.split_first() {
-            let arg_typ = self.infer_pat(first)?;
-            let ret_typ = self.infer_lambda(rest, body)?;
-            Ok(Ty::arrow(self.ctxt, arg_typ, ret_typ))
-        } else {
-            self.infer_expr(body)
-        }
+        self.env.ast.insert(expr.ast_id, ty);
+        Ok(ty)
     }
 
     /// Infer the type of a path by looking it up in the environment.
-    fn infer_path(&mut self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
+    fn infer_path(&self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let res = self.res[path.ast_id];
         Ok(self.env.res[&res])
     }
 
+    fn infer_constructor(&self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
+        let res = self.res[path.ast_id];
+        Ok(self.res.constructors[&res.res_id()].ty)
+    }
+
     /// Infer a type for a pattern.
     fn infer_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let typ = match pat.kind {
+        let ty = match pat.kind {
             PatKind::Wild => self.fresh_var(),
             PatKind::Var(id) => {
                 let var = self.fresh_var();
@@ -392,150 +375,74 @@ impl<'ast, 't> Infer<'ast, 't> {
                 self.env.res.insert(res, var);
                 var
             }
-            PatKind::Lit(l) => self.type_from_lit(l, pat.span),
-            PatKind::Ann(pat, typ) => {
-                //FIXME self.check_pat(pat, typ)?;
-                //typ
-                todo!()
+            PatKind::Lit(l) => self.type_from_lit(l),
+            PatKind::Ann(p, t) => {
+                let expected = self.res.annotations[&pat.ast_id];
+                let expected = self.skolemize(expected);
+                match p.kind {
+                    PatKind::Wild => (),
+                    _ => {
+                        let ty = self.infer_pat(p)?;
+                        self.eq(Origin::Generic(p.span, t.span), ty, expected)?;
+                    }
+                }
+                expected
             }
-            PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?, pat.span),
+            PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
             PatKind::Constructor(cons, args) => {
-                // TODO. well-formed check for cons_t
-                let cons_typ = self.infer_path(cons)?;
+                let cons_ty = self.infer_constructor(cons)?;
                 if args.is_empty() {
-                    cons_typ
+                    cons_ty
                 } else {
-                    let arg_typs = self.infer_pats(args)?;
-                    let ret_typ = self.fresh_var();
-                    let cons_typ = self.instantiate(cons_typ);
-                    self.constrain(Ty::n_arrow(self.ctxt, arg_typs, ret_typ), cons_typ);
-                    ret_typ
+                    let arg_tys = self.infer_pats(args)?;
+                    let ret_ty = self.fresh_var();
+                    self.eq(
+                        Origin::Generic(pat.span, cons.span()),
+                        Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                        cons_ty,
+                    )?;
+                    ret_ty
                 }
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
         };
-        self.env.ast.insert(pat.ast_id, typ);
-        Ok(typ)
+        self.env.ast.insert(pat.ast_id, ty);
+        Ok(ty)
     }
 
     fn infer_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<Vec<Ty<'t>>, InferError<'t>> {
-        let mut typs = Vec::with_capacity(pats.len());
+        let mut tys = Vec::with_capacity(pats.len());
         for pat in pats {
-            typs.push(self.infer_pat(pat)?);
+            tys.push(self.infer_pat(pat)?);
         }
-        Ok(typs)
+        Ok(tys)
     }
 
-    /// Check an expression against a type.
     fn check_expr(
         &mut self,
         expr: &'ast Expr<'ast>,
         expected: Ty<'t>,
+        origin: Origin,
     ) -> Result<(), InferError<'t>> {
-        //let expected = self.skolemize(expected);
         match (expr.kind, expected.kind()) {
             (ExprKind::External(_), _) => (),
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
-            (ExprKind::Lit(l), TyKind::Var(_)) => {
-                self.constrain(expected, self.type_from_lit(l, expr.span));
-            }
-
-            // TODO. these branches probably aren't necessary
-            (ExprKind::Lambda(lambda), TyKind::Uni(_)) => {
-                let mut arg_typs = Vec::with_capacity(lambda.args.len());
-                let ret_typ =
-                    self.check_lambda_var(lambda.args, lambda.body, expected, &mut arg_typs)?;
-                self.constrain(expected, Ty::n_arrow(self.ctxt, arg_typs, ret_typ));
-            }
-            (ExprKind::Lambda(lambda), TyKind::Arrow(..)) => {
-                self.check_lambda_arrow(lambda.args, lambda.body, expected)?
-            }
-
-            (ExprKind::Tuple(es), TyKind::Tuple(ts)) => {
-                if es.len() == ts.len() {
-                    for (e, &t) in es.iter().zip(*ts) {
-                        self.check_expr(e, t)?;
-                    }
-                } else {
-                    return Err(InferError::ExprTupleLength(expr.span, es.len(), ts.len()));
-                }
-            }
             (ExprKind::Case(scrutinee, arms), _) => {
-                let typ = self.infer_expr(scrutinee)?;
-                for arm in arms {
-                    let pat_typ = self.infer_pat(&arm.0)?;
-                    self.constrain(typ, pat_typ);
-                    let arm_typ = self.infer_expr(&arm.1)?;
-                    self.constrain(arm_typ, expected);
+                let scrutinee_ty = self.infer_expr(scrutinee)?;
+                for (pat, arm) in arms {
+                    let pat_ty = self.infer_pat(pat)?;
+                    self.eq(
+                        Origin::Generic(scrutinee.span, pat.span),
+                        scrutinee_ty,
+                        pat_ty,
+                    )?;
+                    let arm_ty = self.infer_expr(arm)?;
+                    self.eq(origin, arm_ty, expected)?;
                 }
             }
             (_, _) => {
-                let typ = self.infer_expr(expr)?;
-                self.constrain(typ, expected);
-            }
-        }
-        Ok(())
-    }
-
-    fn check_lambda_var(
-        &mut self,
-        args: &'ast [Pat<'ast>],
-        body: &'ast Expr<'ast>,
-        var: Ty<'t>,
-        arg_typs: &mut Vec<Ty<'t>>,
-    ) -> Result<Ty<'t>, InferError<'t>> {
-        if let Some((first, rest)) = args.split_first() {
-            let typ = self.infer_pat(first)?;
-            arg_typs.push(typ);
-            self.check_lambda_var(rest, body, typ, arg_typs)
-        } else {
-            self.check_expr(body, var)?;
-            Ok(var)
-        }
-    }
-
-    /// Check a lambda expression `(\args -> body)` against an arrow type.
-    fn check_lambda_arrow(
-        &mut self,
-        args: &'ast [Pat<'ast>],
-        body: &'ast Expr<'ast>,
-        arrow: Ty<'t>,
-    ) -> Result<(), InferError<'t>> {
-        if let Some((first, rest)) = args.split_first() {
-            match *arrow.kind() {
-                TyKind::Arrow(arg, ret) => {
-                    self.check_pat(first, arg)?;
-                    self.check_lambda_arrow(rest, body, ret)
-                }
-                _ if rest.is_empty() => self.check_pat(first, arrow),
-                _ => unreachable!(),
-            }
-        } else {
-            self.check_expr(body, arrow)
-        }
-    }
-
-    /// Check a pattern against a type.
-    fn check_pat(&mut self, pat: &'ast Pat<'ast>, expected: Ty<'t>) -> Result<(), InferError<'t>> {
-        match (pat.kind, expected.kind()) {
-            (PatKind::Wild, _) => (),
-            (PatKind::Var(path), _) => {
-                let res = self.res[path.ast_id];
-                self.env.res.insert(res, expected);
-            }
-            (PatKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
-            (PatKind::Tuple(ps), TyKind::Tuple(ts)) => {
-                if ps.len() == ts.len() {
-                    for (p, &t) in ps.iter().zip(*ts) {
-                        self.check_pat(p, t)?;
-                    }
-                } else {
-                    return Err(InferError::PatTupleLength(pat.span, ps.len(), ts.len()));
-                }
-            }
-            (_, _) => {
-                let typ = self.infer_pat(pat)?;
-                self.constrain(typ, expected);
+                let ty = self.infer_expr(expr)?;
+                self.eq(origin, ty, expected)?;
             }
         }
         Ok(())

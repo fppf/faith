@@ -8,12 +8,12 @@ use base::{
     hash::Map,
     index::{Idx, IndexVec},
     pp::FormatIterator,
+    unify::{UnificationTable, UnifyKey, UnifyValue},
 };
 
 use crate::{
     TyCtxt,
     ty::{Kind, Ty, TypeFolder, TypeVisitor, UniVar, UniVarId},
-    unify::{UnificationTable, UnifyKey, UnifyValue},
 };
 
 base::newtype_index! {
@@ -97,7 +97,7 @@ impl<'t> Substitution<'t> {
         }
     }
 
-    pub fn new_var(&self) -> (UniVarId, Ty<'t>) {
+    pub fn new_var(&self) -> Ty<'t> {
         let mut inner = self.inner.borrow_mut();
         let len = inner.variables.len();
         let var = inner.variables.push(Ty::uni_var(
@@ -107,7 +107,7 @@ impl<'t> Substitution<'t> {
         inner.types.insert(var, OnceCell::new());
         let key = inner.union.new_key(Level::new(var.index()));
         assert_eq!(var.index(), key.index());
-        (var, inner.variables[var])
+        inner.variables[var]
     }
 
     pub fn insert(&self, var: UniVarId, ty: Ty<'t>) {

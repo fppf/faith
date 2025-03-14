@@ -46,6 +46,7 @@ pub enum TokenKind {
     // ()
     UNIT,
 
+    // FIXME. clean up unused keywords.
     KW_AND,
     KW_AS,
     KW_CASE,

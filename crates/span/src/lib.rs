@@ -66,6 +66,11 @@ impl Span {
         Self::from(0..0)
     }
 
+    // FIXME. marker for incorrect spans
+    pub fn fixme() -> Self {
+        Self::dummy()
+    }
+
     #[inline]
     pub fn merge(&self, sp: Self) -> Self {
         if self.start <= sp.end {

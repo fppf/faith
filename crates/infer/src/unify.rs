@@ -1,223 +1,94 @@
-/// Union-find implementation from [ena](https://docs.rs/ena).
-use base::index::Idx;
+use span::Span;
 
-pub trait UnifyKey: Idx {
-    type Value: UnifyValue;
+use crate::{
+    Infer,
+    error::{InferError, TypeUnifyError, TypeUnifyErrorKind},
+    ty::{Ty, TyKind},
+};
 
-    /// You should return first the key that should be used as root,
-    /// then the other key (that will then point to the new root).
-    ///
-    /// NB. The only reason to implement this method is if you want to
-    /// control what value is returned from `find()`. In general, it
-    /// is better to let the unification table determine the root,
-    /// since overriding the rank can cause execution time to increase
-    /// dramatically.
-    #[allow(unused_variables)]
-    fn order_roots(
-        a: Self,
-        a_value: &Self::Value,
-        b: Self,
-        b_value: &Self::Value,
-    ) -> Option<(Self, Self)> {
-        None
+// TODO. Add more context options.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Origin {
+    Generic(Span, Span),
+    If(Span),
+    Seq(Span),
+    Vector { vector_span: Span, elem_span: Span },
+}
+
+impl<'t> Infer<'_, 't> {
+    pub fn eq(&mut self, origin: Origin, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), InferError<'t>> {
+        log::trace!("[eq] {lhs} ~ {rhs}");
+        let lhs = self.instantiate(lhs);
+        let rhs = self.instantiate(rhs);
+        Unifier {
+            infer: self,
+            origin,
+        }
+        .unify(lhs, rhs)
+        .map_err(InferError::TypeUnifyFail)
     }
 }
 
-pub trait UnifyValue: Clone {
-    type Error;
-
-    fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, Self::Error>;
+struct Unifier<'u, 'ast, 't> {
+    infer: &'u mut Infer<'ast, 't>,
+    origin: Origin,
 }
 
-impl UnifyValue for () {
-    type Error = !;
+impl<'t> Unifier<'_, '_, 't> {
+    fn unify(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), TypeUnifyError<'t>> {
+        log::trace!("  [unify] {lhs} ~ {rhs}");
+        let lhs = self.infer.subs.real(lhs);
+        let rhs = self.infer.subs.real(rhs);
+        log::trace!("    [real] {lhs} ~ {rhs}");
+        match (lhs.as_var(), rhs.as_var()) {
+            (_, Some(_)) => self.infer.subs.union(rhs, lhs).map_err(|(v, t)| {
+                TypeUnifyError::new(TypeUnifyErrorKind::Occurs(v, t), self.origin)
+            }),
+            (Some(_), _) => self.infer.subs.union(lhs, rhs).map_err(|(v, t)| {
+                TypeUnifyError::new(TypeUnifyErrorKind::Occurs(v, t), self.origin)
+            }),
+            (None, None) => match (*lhs.kind(), *rhs.kind()) {
+                (lhs, rhs) if lhs == rhs => Ok(()),
+                (TyKind::Arrow(l_arg, l_ret), TyKind::Arrow(r_arg, r_ret)) => {
+                    self.unify(l_arg, r_arg)?;
+                    self.unify(l_ret, r_ret)
+                }
+                (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
+                    let l_h = self
+                        .infer
+                        .res
+                        .types
+                        .get(&l_h.res_id())
+                        .expect("ICE: resolve");
+                    let r_h = self
+                        .infer
+                        .res
+                        .types
+                        .get(&r_h.res_id())
+                        .expect("ICE: resolve");
+                    self.unify(*l_h, *r_h)?;
+                    self.zip_unify(l_args, r_args)
+                }
+                (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
+                (TyKind::Vector(l), TyKind::Vector(r)) => self.unify(l, r),
+                (_, _) => Err(TypeUnifyError::new(
+                    TypeUnifyErrorKind::Mismatch(lhs, rhs),
+                    self.origin,
+                )),
+            },
+        }
+    }
 
-    fn unify_values(_: &Self, _: &Self) -> Result<Self, Self::Error> {
+    fn zip_unify(&mut self, lhs: &[Ty<'t>], rhs: &[Ty<'t>]) -> Result<(), TypeUnifyError<'t>> {
+        if lhs.len() != rhs.len() {
+            return Err(TypeUnifyError::new(
+                TypeUnifyErrorKind::Length(lhs.len(), rhs.len()),
+                self.origin,
+            ));
+        }
+        for (&l, &r) in lhs.iter().zip(rhs) {
+            self.unify(l, r)?;
+        }
         Ok(())
-    }
-}
-
-struct VarValue<K: UnifyKey> {
-    parent: K,
-    value: K::Value,
-    rank: u32,
-}
-
-impl<K: UnifyKey> VarValue<K> {
-    fn new_var(key: K, value: K::Value) -> Self {
-        Self {
-            parent: key,
-            value,
-            rank: 0,
-        }
-    }
-
-    fn redirect(&mut self, to: K) {
-        self.parent = to;
-    }
-
-    fn root(&mut self, rank: u32, value: K::Value) {
-        self.rank = rank;
-        self.value = value;
-    }
-}
-
-pub struct UnificationTable<K: UnifyKey> {
-    values: Vec<VarValue<K>>,
-}
-
-impl<K: UnifyKey> Default for UnificationTable<K> {
-    fn default() -> Self {
-        Self { values: Vec::new() }
-    }
-}
-
-impl<K: UnifyKey> UnificationTable<K> {
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn new_key(&mut self, value: K::Value) -> K {
-        let key = <K as Idx>::new(self.len());
-        self.values.push(VarValue::new_var(key, value));
-        key
-    }
-
-    /// Given two keys, indicates whether they have been unioned together.
-    #[allow(unused)]
-    pub fn unioned(&mut self, key_a: K, key_b: K) -> bool {
-        self.find(key_a) == self.find(key_b)
-    }
-
-    /// Given a key, returns the (current) root key.
-    pub fn find(&mut self, key: K) -> K {
-        self.uninlined_get_root_key(key)
-    }
-
-    /// Unions together two variables, merging their values. If merging the values fails, the error
-    /// is propogates and this method has no effect.
-    pub fn unify_var_var(
-        &mut self,
-        key_a: K,
-        key_b: K,
-    ) -> Result<(), <<K as UnifyKey>::Value as UnifyValue>::Error> {
-        let root_a = self.uninlined_get_root_key(key_a);
-        let root_b = self.uninlined_get_root_key(key_b);
-
-        if root_a == root_b {
-            return Ok(());
-        }
-
-        let combined =
-            K::Value::unify_values(&self.value(root_a).value, &self.value(root_b).value)?;
-        self.unify_roots(root_a, root_b, combined);
-        Ok(())
-    }
-
-    /// Set the value of the key `key_a` to `value_b`, attempting to merge with the previous value.
-    pub fn unify_var_value(
-        &mut self,
-        key_a: K,
-        value_b: K::Value,
-    ) -> Result<(), <<K as UnifyKey>::Value as UnifyValue>::Error> {
-        let root_a = self.uninlined_get_root_key(key_a);
-        let value = K::Value::unify_values(&self.value(root_a).value, &value_b)?;
-        self.update_value(root_a, |node| node.value = value);
-        Ok(())
-    }
-
-    /// Returns the current value for the given key. If the key has been unioned, this will give
-    /// the value from the current root.
-    pub fn probe_value(&mut self, key: K) -> K::Value {
-        self.inlined_probe_value(key)
-    }
-
-    #[inline(always)]
-    pub fn inlined_probe_value(&mut self, key: K) -> K::Value {
-        let key = self.inlined_get_root_key(key);
-        self.value(key).value.clone()
-    }
-
-    fn value(&self, key: K) -> &VarValue<K> {
-        &self.values[key.index()]
-    }
-
-    #[inline(always)]
-    fn inlined_get_root_key(&mut self, key: K) -> K {
-        let v = self.value(key);
-        if v.parent == key {
-            return key;
-        }
-
-        let redirect = v.parent;
-        let root_key = self.uninlined_get_root_key(redirect);
-        if root_key != redirect {
-            self.update_value(key, |v| v.parent = root_key);
-        }
-        root_key
-    }
-
-    #[inline(never)]
-    fn uninlined_get_root_key(&mut self, key: K) -> K {
-        self.inlined_get_root_key(key)
-    }
-
-    fn update_value<F>(&mut self, key: K, f: F)
-    where
-        F: FnOnce(&mut VarValue<K>),
-    {
-        f(&mut self.values[key.index()]);
-    }
-
-    fn unify_roots(&mut self, key_a: K, key_b: K, new_value: K::Value) {
-        let rank_a = self.value(key_a).rank;
-        let rank_b = self.value(key_b).rank;
-
-        if let Some((new_root, redirected)) = K::order_roots(
-            key_a,
-            &self.value(key_a).value,
-            key_b,
-            &self.value(key_b).value,
-        ) {
-            // Compute the new rank for the new root that they chose;
-            // this may not be the optimal choice.
-            let new_rank = if new_root == key_a {
-                debug_assert_eq!(redirected, key_b);
-                if rank_a > rank_b { rank_a } else { rank_b + 1 }
-            } else {
-                debug_assert_eq!(new_root, key_b);
-                debug_assert_eq!(redirected, key_a);
-                if rank_b > rank_a { rank_b } else { rank_a + 1 }
-            };
-            self.redirect_root(new_rank, redirected, new_root, new_value);
-        } else if rank_a > rank_b {
-            // a has greater rank, so a should become b's parent
-            // (b redirects to a).
-            self.redirect_root(rank_a, key_b, key_a, new_value);
-        } else if rank_a < rank_b {
-            // b has greater rank, so a should redirect to b.
-            self.redirect_root(rank_b, key_a, key_b, new_value);
-        } else {
-            // If equal, redirect one to the other and increment the other's rank.
-            self.redirect_root(rank_a + 1, key_a, key_b, new_value);
-        }
-    }
-
-    // Internal method to redirect `old_root_key` (which is currently a root) to a child of
-    // `new_root_key` (which will remain a root). The rank and value of `new_root_key` will be
-    // updated to `new_rank` and `new_value` respectively.
-    fn redirect_root(
-        &mut self,
-        new_rank: u32,
-        old_root_key: K,
-        new_root_key: K,
-        new_value: K::Value,
-    ) {
-        self.update_value(old_root_key, |old_root_value| {
-            old_root_value.redirect(new_root_key);
-        });
-        self.update_value(new_root_key, |new_root_value| {
-            new_root_value.root(new_rank, new_value);
-        });
     }
 }

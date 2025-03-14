@@ -46,7 +46,7 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
         return Ok(());
     }
 
-    let ctxt = infer::TyCtxt::default();
+    let ctxt = infer::ty::TyCtxt::default();
     infer::infer_program_in(&ctxt, program)?;
 
     if stop_after == Pass::Infer {

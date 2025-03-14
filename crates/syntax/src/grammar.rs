@@ -23,7 +23,7 @@ macro_rules! alloc_iter {
     };
 }
 
-pub fn program<'ast>(mut p: Parser<'ast>) -> ParseResult<&'ast Program<'ast>> {
+pub fn program(mut p: Parser<'_>) -> ParseResult<&Program<'_>> {
     let unit = comp_unit_eof(p.current_comp_unit, &mut p, false)?;
     p.expect(KW_MAIN)?;
     p.expect(EQUAL)?;
@@ -56,10 +56,10 @@ pub fn comp_unit<'ast>(
     Ok(comp_unit)
 }
 
-fn parse_import<'ast>(
+fn parse_import(
     import_path: &std::path::Path,
     span: Span,
-    p: &mut Parser<'ast>,
+    p: &mut Parser<'_>,
 ) -> ParseResult<SourceId> {
     let mut file_path = std::path::PathBuf::new();
     if let Some(base_path) = span::with_source_map(|sm| sm[p.current_comp_unit].path.clone()) {
@@ -815,7 +815,7 @@ fn type_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
         Ok(head)
     } else {
         match *head {
-            Type::App(cons_path, empty_args) if empty_args.is_empty() => Ok(Sp::new(
+            Type::App(cons_path, []) => Ok(Sp::new(
                 Type::App(cons_path, alloc_iter!(p, args)),
                 p.end(m),
             )),
