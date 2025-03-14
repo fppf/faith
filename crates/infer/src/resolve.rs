@@ -388,8 +388,8 @@ impl<'ast, 't> Resolver<'ast, 't> {
         //     return Ok(res);
         // }
 
-        println!("resolve_path {path}");
         let res = self.resolve_path_inner(ns, path)?;
+        log::trace!("resolve_path {path} => {res}");
         self.res.res.insert(path.ast_id, res);
         Ok(res)
     }
@@ -557,7 +557,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     }
                 };
                 self.res.values.insert(res_id, value);
-                log::trace!("{ident} => {res_id}");
+                log::trace!("{ident} {} => {res_id}", ast_id);
             }
             Item::Mod(id, mexpr) => {
                 seen.update(Namespace::Mod, id.ident)?;
@@ -596,6 +596,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
             self.current_module_mut()
                 .types
                 .insert(decl.id.ident, res.res_id());
+            log::trace!("{} {} => {res}", decl.id.ident, decl.id.ast_id);
         }
         for (decl, res) in group.iter().zip(decl_res) {
             match decl.kind {
@@ -647,12 +648,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
         let ty = match typ.value {
             Type::Base(b) => Ty::new(self.ctxt, TyKind::Base(b), typ.span()),
             Type::Var(id) => {
-                /*
-                let id = self
-                    .renamer
-                    .find_ident(Namespace::Type, *a)
-                    .unwrap_or_else(|_| self.renamer.fresh_ident(Namespace::Type, *a));
-                    */
+                // FIXME
                 Ty::type_var(self.ctxt, TypeVar::new(id.ident))
             }
             Type::Arrow(arg, ret) => {
@@ -691,7 +687,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
             PatKind::Var(id) => {
                 let res = Res::Local(self.new_res_id());
                 self.locals.insert(id.ident, res);
-                log::trace!("[local] {} => {}", id.ident, res.res_id());
                 self.res.res.insert(id.ast_id, res);
                 Ok(())
             }

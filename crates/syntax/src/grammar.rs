@@ -72,14 +72,16 @@ fn parse_import<'ast>(
         {
             source_id
         } else {
-            let mut sub_p =
-                make_parser(p.arena, PathOrStr::Path(&file_path)).map_err(|_e /*FIXME*/| {
+            let mut sub_p = make_parser(p.arena, PathOrStr::Path(&file_path), p.ast_id).map_err(
+                |_e /*FIXME*/| {
                     ParseError::new(format!("cannot parse {}", file_path.display()), span)
-                })?;
+                },
+            )?;
             sub_p.inside_std = p.inside_std;
             log::info!("parsing '{}'", import_path.display());
             let comp_unit = comp_unit(sub_p.current_comp_unit, &mut sub_p)?;
             p.imports.extend(sub_p.imports);
+            p.ast_id = sub_p.ast_id;
             comp_unit.source_id
         },
     )

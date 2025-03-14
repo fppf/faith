@@ -45,13 +45,14 @@ impl<'ast> Parser<'ast> {
     pub fn new(
         arena: &'ast Arena<'ast>,
         current_comp_unit: SourceId,
+        ast_id: AstId,
         tokens: impl IntoIterator<Item = Token>,
     ) -> Self {
         Self {
             tokens: tokens.into_iter().collect(),
             pos: 0,
             steps: Cell::default(),
-            ast_id: AstId::ZERO,
+            ast_id,
             arena,
             current_comp_unit,
             inside_std: false,

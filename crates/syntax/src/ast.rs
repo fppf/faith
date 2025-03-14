@@ -1,8 +1,16 @@
+use std::fmt;
+
 use base::hash::Map;
 use span::{Ident, SourceId, Sp, Span, Sym};
 
 base::newtype_index! {
     pub struct AstId {}
+}
+
+impl fmt::Display for AstId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "${}", self.index())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

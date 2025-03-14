@@ -240,14 +240,10 @@ impl<'ast, 't> Infer<'ast, 't> {
                 Item::Type(..) => (),
                 Item::Value(id, _, expr) => {
                     let res = self.res[id.ast_id];
-                    let value = self
-                        .res
-                        .values
-                        .get(&res.res_id())
-                        .unwrap_or_else(|| panic!("ICE: expected '{id}' to be resolved"));
-
-                    println!("{id} {expr:?} {:?}", value.typ);
-
+                    let value =
+                        self.res.values.get(&res.res_id()).unwrap_or_else(|| {
+                            panic!("ICE: expected '{id}' to be resolved to {res}")
+                        });
                     let typ = if value.recursive {
                         self.fresh_var()
                     } else {

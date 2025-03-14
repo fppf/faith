@@ -7,6 +7,7 @@ mod parser;
 mod pretty;
 mod token;
 
+use ast::AstId;
 use lexer::Lexer;
 use parser::Parser;
 use span::diag::{Diagnostic, Level};
@@ -19,7 +20,7 @@ pub fn parse_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     path: &std::path::Path,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    let parser = make_parser(arena, PathOrStr::Path(path))?;
+    let parser = make_parser(arena, PathOrStr::Path(path), AstId::ZERO)?;
     grammar::program(parser).map_err(Diagnostic::from)
 }
 
@@ -27,7 +28,7 @@ pub fn parse_str_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     src: &str,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    let parser = make_parser(arena, PathOrStr::Str(src))?;
+    let parser = make_parser(arena, PathOrStr::Str(src), AstId::ZERO)?;
     grammar::program(parser).map_err(Diagnostic::from)
 }
 
@@ -39,6 +40,7 @@ pub(crate) enum PathOrStr<'a> {
 pub(crate) fn make_parser<'ast>(
     arena: &'ast Arena<'ast>,
     source: PathOrStr<'_>,
+    ast_id: AstId,
 ) -> Result<Parser<'ast>, Diagnostic> {
     span::with_source_map(|sm| {
         let source_id = match source {
@@ -48,7 +50,12 @@ pub(crate) fn make_parser<'ast>(
             }
             PathOrStr::Str(s) => sm.load_str(s),
         };
-        Ok(Parser::new(arena, source_id, Lexer::new(&sm[source_id])))
+        Ok(Parser::new(
+            arena,
+            source_id,
+            ast_id,
+            Lexer::new(&sm[source_id]),
+        ))
     })
 }
 
