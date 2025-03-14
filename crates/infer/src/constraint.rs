@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{collections::VecDeque, fmt};
 
-use base::hash::IndexSet;
+use base::hash::{IndexSet, Set};
 use span::Span;
 
 use crate::{
@@ -8,19 +8,6 @@ use crate::{
     error::TypeUnifyError,
     typ::{Ty, TyKind},
 };
-
-pub fn solve<'t>(
-    tc: &mut Infer<'_, 't>,
-    constraints: Vec<Constraint<'t>>,
-) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
-    let mut solver = Solver::default();
-    solver.work_list.extend(
-        constraints
-            .iter()
-            .flat_map(|&constraint| tc.canonicalize(constraint)),
-    );
-    solver.solve(tc)
-}
 
 /// Equality constraint (t1 ~ t2).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -30,9 +17,7 @@ pub struct Constraint<'t> {
 }
 
 /*
-impl<'hir, T> PartialEq for Constraint<'hir, T>
-where
-    T: Constrainable<'hir>,
+impl PartialEq for Constraint<'_>
 {
     fn eq(&self, other: &Self) -> bool {
         // l1 ~ r1 == l2 ~ r2 if
@@ -45,13 +30,6 @@ where
             lhs: l2, rhs: r2, ..
         } = other;
         ((l1 == l2) && (r1 == r2)) || ((l1 == r2) && (r1 == l2))
-    }
-}
-impl<'t> Eq for Constraint<'t> {}
-
-impl<'hir, T> Hash for Constraint<'hir, T> where T:Constrainable<'hir> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-
     }
 }
 */
@@ -122,7 +100,7 @@ impl<'t> Infer<'_, 't> {
         }
     }
 
-    fn canonicalize(&self, ct: Constraint<'t>) -> Vec<Constraint<'t>> {
+    pub fn canonicalize(&self, ct: Constraint<'t>) -> Vec<Constraint<'t>> {
         if ct.lhs == ct.rhs {
             // Discharge trivial equalities.
             Vec::new()
@@ -213,40 +191,34 @@ impl<'t> Infer<'_, 't> {
     }
 }
 
-mod wl {
-    use super::Constraint;
-    use base::hash::Set;
-    use std::collections::VecDeque;
+#[derive(Clone, Default)]
+pub struct WorkList<'t> {
+    contains: Set<Constraint<'t>>,
+    queue: VecDeque<Constraint<'t>>,
+}
 
-    #[derive(Default)]
-    pub struct WorkList<'t> {
-        contains: Set<Constraint<'t>>,
-        queue: VecDeque<Constraint<'t>>,
-    }
-
-    impl<'t> WorkList<'t> {
-        pub fn push(&mut self, ct: Constraint<'t>) {
-            if self.contains.insert(ct) {
-                self.queue.push_back(ct);
-            }
-        }
-
-        pub fn pop(&mut self) -> Option<Constraint<'t>> {
-            let front = self.queue.pop_front()?;
-            self.contains.remove(&front);
-            Some(front)
-        }
-
-        pub fn into_constraints(self) -> Vec<Constraint<'t>> {
-            self.queue.into()
+impl<'t> WorkList<'t> {
+    pub fn push(&mut self, ct: Constraint<'t>) {
+        if self.contains.insert(ct) {
+            self.queue.push_back(ct);
         }
     }
 
-    impl<'t> Extend<Constraint<'t>> for WorkList<'t> {
-        fn extend<I: IntoIterator<Item = Constraint<'t>>>(&mut self, iter: I) {
-            for item in iter {
-                self.push(item);
-            }
+    pub fn pop(&mut self) -> Option<Constraint<'t>> {
+        let front = self.queue.pop_front()?;
+        self.contains.remove(&front);
+        Some(front)
+    }
+
+    pub fn into_constraints(self) -> Vec<Constraint<'t>> {
+        self.queue.into()
+    }
+}
+
+impl<'t> Extend<Constraint<'t>> for WorkList<'t> {
+    fn extend<I: IntoIterator<Item = Constraint<'t>>>(&mut self, iter: I) {
+        for item in iter {
+            self.push(item);
         }
     }
 }
@@ -346,42 +318,18 @@ mod wl {
 //
 //   return WL
 //
-
-#[derive(Default)]
-struct Solver<'t> {
-    /// Constraints with no pairwise interactions.
-    inert_set: IndexSet<Constraint<'t>>,
-
-    /// Unprocessed constraints.
-    work_list: wl::WorkList<'t>,
-}
-
-impl<'t> Solver<'t> {
-    fn solve(mut self, tc: &mut Infer<'_, 't>) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
-        while self.step(tc) {
-            // step
-        }
-
-        // We have no more possible reactions between constraints;
-        // let's try to unify the inerts.
-        for inert in &self.inert_set {
-            tc.try_unify(inert.lhs, inert.rhs)?;
-        }
-
-        // Residual constraints.
-        Ok(self.work_list.into_constraints())
-    }
-
-    fn step(&mut self, tc: &Infer<'_, 't>) -> bool {
-        if let Some(ct) = self.work_list.pop() {
+impl<'t> Infer<'_, 't> {
+    pub fn solve(&mut self) -> Result<Vec<Constraint<'t>>, TypeUnifyError<'t>> {
+        // Constraints with no pairwise interactions.
+        let mut inert_set = IndexSet::default();
+        while let Some(ct) = self.constraints.pop() {
             let mut react_products = Vec::new();
-
-            self.inert_set.retain(|&inert| {
-                if let Some(rp) = tc.interact(ct, inert) {
+            inert_set.retain(|&inert| {
+                if let Some(rp) = self.interact(ct, inert) {
                     // If the constraint reacts with an inert, then
                     // both the (canonicalized) reaction product and the inert are
                     // put into the worklist (as the inert is no longer inert).
-                    react_products.extend(tc.canonicalize(rp));
+                    react_products.extend(self.canonicalize(rp));
                     react_products.push(inert);
                     false
                 } else {
@@ -391,16 +339,20 @@ impl<'t> Solver<'t> {
 
             if react_products.is_empty() {
                 // No reactions, so the constraint is inert.
-                self.inert_set.extend(tc.canonicalize(ct));
+                inert_set.extend(self.canonicalize(ct));
             } else {
                 // Otherwise, we have more work to do.
-                self.work_list.extend(react_products);
+                self.constraints.extend(react_products);
             }
-
-            true
-        } else {
-            // Worklist is empty, we are done.
-            false
         }
+
+        // We have no more possible reactions between constraints;
+        // let's try to unify the inerts.
+        for inert in &inert_set {
+            self.try_unify(inert.lhs, inert.rhs)?;
+        }
+
+        // Residual constraints.
+        Ok(self.constraints.clone().into_constraints())
     }
 }

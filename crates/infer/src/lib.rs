@@ -2,7 +2,7 @@
 #![feature(let_chains)]
 
 use base::hash::Map;
-use resolve::{Res, ResId, Resolution};
+use resolve::{Res, Resolution};
 use span::{Ident, Sp, Span, Sym, diag::Diagnostic};
 use syntax::ast::*;
 
@@ -14,7 +14,7 @@ mod unify;
 pub mod error;
 pub mod resolve;
 
-use constraint::Constraint;
+use constraint::{Constraint, WorkList};
 use error::InferError;
 use substitution::Substitution;
 use typ::{Folder, Skolem, SkolemId, Ty, TyKind, TypeVar};
@@ -32,8 +32,6 @@ impl Default for TyCtxt<'_> {
         }
     }
 }
-
-impl<'t> TyCtxt<'t> {}
 
 pub fn infer_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
@@ -57,28 +55,9 @@ struct Infer<'ast, 't> {
     env: Environment<'t>,
     res: &'t Resolution<'ast, 't>,
 
-    type_var_src: TypeVarSource,
     skolem: SkolemId,
-    constraints: Vec<Constraint<'t>>,
+    constraints: WorkList<'t>,
     subs: Substitution<'t>,
-}
-
-#[derive(Default)]
-struct TypeVarSource {
-    char_count: u8,
-}
-
-impl TypeVarSource {
-    fn reset(&mut self) {
-        self.char_count = 0;
-    }
-
-    fn fresh(&mut self, _: ResId) -> TypeVar {
-        let ch = (b'a' + self.char_count) as char;
-        self.char_count = (self.char_count + 1) % (b'z' - b'a');
-        let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
-        TypeVar::new(id)
-    }
 }
 
 impl<'ast, 't> Infer<'ast, 't> {
@@ -92,9 +71,8 @@ impl<'ast, 't> Infer<'ast, 't> {
             program,
             res,
             env: Environment::default(),
-            type_var_src: TypeVarSource::default(),
             skolem: SkolemId::ZERO,
-            constraints: Vec::new(),
+            constraints: WorkList::default(),
             subs: Substitution::new(ctxt),
         }
     }
@@ -111,7 +89,8 @@ impl<'ast, 't> Infer<'ast, 't> {
 
     fn constrain(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) {
         //log::trace!("{lhs} ~ {rhs}");
-        self.constraints.push(Constraint::equal(lhs, rhs));
+        self.constraints
+            .extend(self.canonicalize(Constraint::equal(lhs, rhs)));
     }
 
     fn fresh_var(&self) -> Ty<'t> {
@@ -122,15 +101,18 @@ impl<'ast, 't> Infer<'ast, 't> {
     ///
     /// For example, `generalize('1 -> '1) = 'a -> 'a`.
     fn generalize(&mut self, typ: Ty<'t>) -> Ty<'t> {
-        self.type_var_src.reset();
+        let mut char_count = 0;
+        let mut fresh = || {
+            let ch = (b'a' + char_count) as char;
+            char_count = (char_count + 1) % (b'z' - b'a');
+            let id = Ident::new(Sym::intern(&format!("'{ch}")), Span::dummy());
+            TypeVar::new(id)
+        };
         let typ = self.subs.apply(typ);
         let free_vars = typ.uni_vars();
         if !free_vars.is_empty() {
             for var in free_vars {
-                self.subs.insert(
-                    var.id,
-                    Ty::type_var(self.ctxt, self.type_var_src.fresh(ResId::ZERO /* FIXME */)),
-                );
+                self.subs.insert(var.id, Ty::type_var(self.ctxt, fresh()));
             }
             self.subs.apply(typ)
         } else {
@@ -212,8 +194,7 @@ impl<'ast, 't> Infer<'ast, 't> {
     }
 
     fn solve_current(&mut self) -> Result<(), InferError<'t>> {
-        let constraints: Vec<_> = self.constraints.drain(..).collect();
-        let residual = constraint::solve(self, constraints).map_err(InferError::TypeUnifyFail)?;
+        let residual = self.solve().map_err(InferError::TypeUnifyFail)?;
         if residual.is_empty() {
             Ok(())
         } else {
