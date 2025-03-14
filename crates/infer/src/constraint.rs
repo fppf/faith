@@ -6,7 +6,7 @@ use span::Span;
 use crate::{
     Infer,
     error::TypeUnifyError,
-    typ::{Ty, TyKind},
+    ty::{Ty, TyKind},
 };
 
 /// Equality constraint (t1 ~ t2).

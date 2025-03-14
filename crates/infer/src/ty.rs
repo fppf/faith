@@ -202,14 +202,14 @@ impl fmt::Display for Kind {
     }
 }
 
-pub trait Visitor<T>: Sized {
-    fn visit(&mut self, t: T);
+pub trait TypeVisitor<'t>: Sized {
+    fn visit(&mut self, ty: Ty<'t>);
 }
 
-pub trait Folder<'t, T>: Sized {
+pub trait TypeFolder<'t>: Sized {
     fn ctxt(&self) -> &'t TyCtxt<'t>;
 
-    fn fold(&mut self, t: T) -> T;
+    fn fold(&mut self, ty: Ty<'t>) -> Ty<'t>;
 }
 
 impl<'t> Ty<'t> {
@@ -237,7 +237,7 @@ impl<'t> Ty<'t> {
 
     pub fn visit_with<V>(self, v: &mut V)
     where
-        V: Visitor<Self>,
+        V: TypeVisitor<'t>,
     {
         match *self.kind() {
             TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => (),
@@ -252,7 +252,7 @@ impl<'t> Ty<'t> {
 
     pub fn fold_with<F>(self, f: &mut F) -> Self
     where
-        F: Folder<'t, Self>,
+        F: TypeFolder<'t>,
     {
         let kind = match *self.kind() {
             TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => return self,
@@ -370,12 +370,12 @@ impl<'t> Ty<'t> {
             acc: IndexSet<UniVar>,
         }
 
-        impl<'t> Visitor<Ty<'t>> for Vars {
-            fn visit(&mut self, typ: Ty<'t>) {
-                if let TyKind::Uni(var) = typ.kind() {
+        impl<'t> TypeVisitor<'t> for Vars {
+            fn visit(&mut self, ty: Ty<'t>) {
+                if let TyKind::Uni(var) = ty.kind() {
                     self.acc.insert(*var);
                 }
-                typ.visit_with(self);
+                ty.visit_with(self);
             }
         }
 
@@ -390,12 +390,12 @@ impl<'t> Ty<'t> {
             acc: Set<TypeVar>,
         }
 
-        impl<'t> Visitor<Ty<'t>> for Vars {
-            fn visit(&mut self, typ: Ty<'t>) {
-                if let TyKind::Var(var) = typ.kind() {
+        impl<'t> TypeVisitor<'t> for Vars {
+            fn visit(&mut self, ty: Ty<'t>) {
+                if let TyKind::Var(var) = ty.kind() {
                     self.acc.insert(*var);
                 }
-                typ.visit_with(self);
+                ty.visit_with(self);
             }
         }
 
@@ -404,30 +404,30 @@ impl<'t> Ty<'t> {
         vars.acc
     }
 
-    pub fn subst_uni_var(self, ctxt: &'t TyCtxt<'t>, var: UniVar, typ: Self) -> Self {
+    pub fn subst_uni_var(self, ctxt: &'t TyCtxt<'t>, var: UniVar, ty: Self) -> Self {
         struct Subs<'a> {
             ctxt: &'a TyCtxt<'a>,
             var: UniVar,
-            typ: Ty<'a>,
+            ty: Ty<'a>,
         }
 
-        impl<'a> Folder<'a, Ty<'a>> for Subs<'a> {
+        impl<'a> TypeFolder<'a> for Subs<'a> {
             fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
-            fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
-                if let TyKind::Uni(var) = typ.kind()
+            fn fold(&mut self, ty: Ty<'a>) -> Ty<'a> {
+                if let TyKind::Uni(var) = ty.kind()
                     && var.id == self.var.id
                 {
-                    self.typ
+                    self.ty
                 } else {
-                    typ.fold_with(self)
+                    ty.fold_with(self)
                 }
             }
         }
 
-        Subs { ctxt, var, typ }.fold(self)
+        Subs { ctxt, var, ty }.fold(self)
     }
 }
 

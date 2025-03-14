@@ -8,7 +8,7 @@ use syntax::ast::*;
 
 mod constraint;
 mod substitution;
-mod typ;
+mod ty;
 mod unify;
 
 pub mod error;
@@ -17,7 +17,7 @@ pub mod resolve;
 use constraint::{Constraint, WorkList};
 use error::InferError;
 use substitution::Substitution;
-use typ::{Folder, Skolem, SkolemId, Ty, TyKind, TypeVar};
+use ty::{Skolem, SkolemId, Ty, TyKind, TypeFolder, TypeVar};
 
 base::declare_arena!('t, []);
 
@@ -126,18 +126,18 @@ impl<'ast, 't> Infer<'ast, 't> {
             subs: Map<Ident, Ty<'a>>,
         }
 
-        impl<'a> Folder<'a, Ty<'a>> for Instantiator<'a> {
+        impl<'a> TypeFolder<'a> for Instantiator<'a> {
             fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
-            fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
-                if let TyKind::Var(var) = typ.kind()
+            fn fold(&mut self, ty: Ty<'a>) -> Ty<'a> {
+                if let TyKind::Var(var) = ty.kind()
                     && let Some(&other) = self.subs.get(&var.name)
                 {
                     other
                 } else {
-                    typ.fold_with(self)
+                    ty.fold_with(self)
                 }
             }
         }
@@ -165,17 +165,17 @@ impl<'ast, 't> Infer<'ast, 't> {
             ctxt: &'a TyCtxt<'a>,
         }
 
-        impl<'a> Folder<'a, Ty<'a>> for SkolemReplacer<'a> {
+        impl<'a> TypeFolder<'a> for SkolemReplacer<'a> {
             fn ctxt(&self) -> &'a TyCtxt<'a> {
                 self.ctxt
             }
 
-            fn fold(&mut self, typ: Ty<'a>) -> Ty<'a> {
-                if let TyKind::Var(var) = typ.kind() {
+            fn fold(&mut self, ty: Ty<'a>) -> Ty<'a> {
+                if let TyKind::Var(var) = ty.kind() {
                     let skolem = self.skolems[var];
                     Ty::new(self.ctxt(), TyKind::Skolem(skolem), skolem.name.span)
                 } else {
-                    typ.fold_with(self)
+                    ty.fold_with(self)
                 }
             }
         }

@@ -12,7 +12,7 @@ use base::{
 
 use crate::{
     TyCtxt,
-    typ::{Folder, Kind, Ty, UniVar, UniVarId, Visitor},
+    ty::{Kind, Ty, TypeFolder, TypeVisitor, UniVar, UniVarId},
     unify::{UnificationTable, UnifyKey, UnifyValue},
 };
 
@@ -177,7 +177,7 @@ impl<'t> Substitution<'t> {
             subs: &'a Substitution<'t>,
         }
 
-        impl<'t> Folder<'t, Ty<'t>> for Applier<'_, 't> {
+        impl<'t> TypeFolder<'t> for Applier<'_, 't> {
             fn ctxt(&self) -> &'t TyCtxt<'t> {
                 self.subs.ctxt
             }
@@ -213,7 +213,7 @@ impl<'t> Substitution<'t> {
             subs: &'a Substitution<'t>,
         }
 
-        impl<'t> Visitor<Ty<'t>> for Occurs<'_, 't> {
+        impl<'t> TypeVisitor<'t> for Occurs<'_, 't> {
             fn visit(&mut self, mut ty: Ty<'t>) {
                 if let Some(other) = ty.as_var() {
                     if let Some(real) = self.subs.find(other) {

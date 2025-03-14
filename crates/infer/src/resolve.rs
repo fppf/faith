@@ -22,7 +22,7 @@ use syntax::ast::{
 
 use crate::{
     TyCtxt,
-    typ::{Ty, TyKind, TypeVar},
+    ty::{Ty, TyKind, TypeVar},
 };
 
 base::newtype_index! {

@@ -7,7 +7,7 @@ use span::{
 use crate::{
     constraint::Constraint,
     resolve::Res,
-    typ::{Ty, UniVarId},
+    ty::{Ty, UniVarId},
 };
 
 pub enum InferError<'t> {
