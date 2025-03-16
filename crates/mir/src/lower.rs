@@ -1,44 +1,56 @@
 use core::panic;
 
 use base::{hash::Map, index::Idx};
-use hir::{
-    Arena, CaseArm, CompUnit, Expr, ExprArg, ExprKind, HirCtxt, HirId, Lambda, ModExpr,
-    ModExprKind, Pat, PatKind, Path, Program, Ty,
-};
-use span::{Ident, Span, Sym};
+use infer::{Environment, Res, ResId, Resolution, ty::Ty};
+use span::{Ident, Sp, Span, Sym};
+use syntax::ast::{self, AstId, ExprKind, Item, PatKind};
 
 use crate::{
     MAIN_LABEL, Module,
     mir::{self, Label},
 };
 
-pub fn lower<'hir>(hir_ctxt: &'hir HirCtxt<'hir>, program: &'hir Program<'hir>) -> mir::Module {
-    LoweringContext::new(hir_ctxt, program).lower()
+pub fn lower<'ast, 't>(
+    syntax_arena: &'ast syntax::Arena<'ast>,
+    program: &'ast ast::Program<'ast>,
+    resolution: &'t Resolution<'t>,
+    environment: &'t Environment<'t>,
+) -> mir::Module {
+    LoweringContext::new(syntax_arena, program, resolution, environment).lower()
 }
 
 // TODO. clean up profanity of maps.
-pub(crate) struct LoweringContext<'hir> {
+pub(crate) struct LoweringContext<'ast, 't> {
     module: mir::Module,
-    hir_id_to_label: Map<HirId, Label>,
-    label_to_hir_id: Map<Label, HirId>,
-    label_to_type: Map<Label, Ty<'hir>>,
-    local_to_label: Map<Ident, Label>,
+    res_to_label: Map<ResId, Label>,
+    label_to_res: Map<Label, ResId>,
+    label_to_type: Map<Label, Ty<'t>>,
+    pub local_to_label: Map<Ident, Label>,
     label: Label,
-    program: &'hir Program<'hir>,
-    hir_ctxt: &'hir HirCtxt<'hir>,
+    program: &'ast ast::Program<'ast>,
+    syntax_arena: &'ast syntax::Arena<'ast>,
+    resolution: &'t Resolution<'t>,
+    environment: &'t Environment<'t>,
 }
 
-impl<'hir> LoweringContext<'hir> {
-    fn new(hir_ctxt: &'hir HirCtxt<'hir>, program: &'hir Program<'hir>) -> Self {
+impl<'ast, 't> LoweringContext<'ast, 't> {
+    fn new(
+        syntax_arena: &'ast syntax::Arena<'ast>,
+        program: &'ast ast::Program<'ast>,
+        resolution: &'t Resolution<'t>,
+        environment: &'t Environment<'t>,
+    ) -> Self {
         Self {
             module: Module::default(),
-            hir_id_to_label: Map::default(),
-            label_to_hir_id: Map::default(),
+            res_to_label: Map::default(),
+            label_to_res: Map::default(),
             label_to_type: Map::default(),
             local_to_label: Map::default(),
             label: MAIN_LABEL.plus(1),
             program,
-            hir_ctxt,
+            syntax_arena,
+            resolution,
+            environment,
         }
     }
 
@@ -48,63 +60,37 @@ impl<'hir> LoweringContext<'hir> {
         label
     }
 
-    fn insert_temp(&mut self, typ: Ty<'hir>) -> (Path<'hir>, Label) {
+    fn insert_temp(&mut self) -> (&'ast ast::Expr<'ast>, Label) {
         let label = self.next_label();
         let id = Ident::new(
             Sym::intern(&format!("~tmp{}", label.index())),
             Span::dummy(),
         );
-        let hir_id = self.hir_ctxt.new_hir_node();
-        self.hir_ctxt.set_type(hir_id, typ);
-        self.hir_id_to_label.insert(hir_id, label);
-        self.label_to_hir_id.insert(label, hir_id);
-        self.label_to_type.insert(label, typ);
         self.local_to_label.insert(id, label);
-        let path = self
-            .hir_ctxt
-            .path(id, [], Span::dummy(), hir::Res::Local(hir_id));
-        (path, label)
+        let expr = self.syntax_arena.alloc(ast::Expr::new(
+            ast::ExprKind::Path(ast::Path::new(id, &[], Span::dummy(), AstId::ZERO)),
+            Span::dummy(),
+            AstId::ZERO,
+        ));
+        (expr, label)
     }
 
-    fn insert_hir_id(&mut self, hir_id: HirId) -> Label {
+    fn new_label(&mut self, ast_id: AstId) -> Label {
+        let res = self.resolution[ast_id];
         let label = self.next_label();
-        self.hir_id_to_label.insert(hir_id, label);
-        self.label_to_hir_id.insert(label, hir_id);
-        let typ = self
-            .hir_ctxt
-            .get_type(hir_id)
-            .unwrap_or_else(|| panic!("no type for {hir_id}"));
-        self.label_to_type.insert(label, typ);
+        log::trace!("{label}: {res}");
+        self.res_to_label.insert(res.res_id(), label);
+        self.label_to_res.insert(label, res.res_id());
         label
     }
 
-    fn insert_path(&mut self, path: Path<'hir>) -> Label {
-        let hir_id = path.res().hir_id();
-        self.insert_hir_id(hir_id)
+    fn get_label(&self, ast_id: AstId) -> Label {
+        let res = self.resolution[ast_id];
+        log::trace!("get_label {res}");
+        self.res_to_label[&res.res_id()]
     }
 
-    fn get_path_label_opt(&self, path: Path<'hir>) -> Option<Label> {
-        let hir_id = path.res().hir_id();
-        self.hir_id_to_label.get(&hir_id).copied()
-    }
-
-    fn get_path_label(&self, path: Path<'hir>) -> Label {
-        self.get_path_label_opt(path)
-            .unwrap_or_else(|| panic!("no label found for {path}"))
-    }
-
-    pub fn get_local_label(&self, ident: Ident) -> Label {
-        self.local_to_label.get(&ident).copied().unwrap()
-    }
-
-    pub fn get_local_hir_id(&self, ident: Ident) -> HirId {
-        self.label_to_hir_id
-            .get(&self.get_local_label(ident))
-            .copied()
-            .unwrap()
-    }
-
-    pub fn get_label_type(&self, label: Label) -> Ty<'hir> {
+    pub fn get_label_type(&self, label: Label) -> Ty<'t> {
         self.label_to_type.get(&label).copied().unwrap()
     }
 
@@ -114,40 +100,47 @@ impl<'hir> LoweringContext<'hir> {
     }
 
     fn lower(mut self) -> mir::Module {
+        for (&res_id, _constructor) in &self.resolution.constructors {
+            let label = self.next_label();
+            self.res_to_label.insert(res_id, label);
+            self.label_to_res.insert(label, res_id);
+        }
         self.lower_comp_unit(self.program.unit);
         let main = self.lower_expr(self.program.main);
         self.push_item(MAIN_LABEL, main);
         self.module
     }
 
-    fn lower_comp_unit(&mut self, unit: &'hir CompUnit<'hir>) {
+    fn lower_comp_unit(&mut self, unit: &'ast ast::CompUnit<'ast>) {
         self.lower_items(unit.items);
     }
 
-    fn lower_mod_expr(&mut self, mexpr: &'hir ModExpr<'hir>) {
-        match mexpr.kind {
-            ModExprKind::Path(_) => (),
-            ModExprKind::Import(source_id) => {
+    fn lower_mod_expr(&mut self, mexpr: &'ast Sp<ast::ModExpr<'ast>>) {
+        match mexpr.value {
+            ast::ModExpr::Path(_) => (),
+            ast::ModExpr::Import(source_id) => {
                 let unit = self
                     .program
                     .imports
                     .get(&source_id)
-                    .expect("invalid import produced by HIR lowering");
+                    .expect("invalid import");
                 self.lower_comp_unit(unit);
             }
-            ModExprKind::Struct(items) => self.lower_items(items),
+            ast::ModExpr::Struct(items) => self.lower_items(items),
         }
     }
 
-    fn lower_items(&mut self, items: &'hir hir::Items<'hir>) {
-        for (_, mexpr) in &items.modules {
-            self.lower_mod_expr(mexpr);
-        }
-
-        for (_, value) in &items.values {
-            let label = self.insert_path(value.path);
-            let body = self.lower_expr(value.expr);
-            self.push_item(label, body);
+    fn lower_items(&mut self, items: &'ast [Sp<Item<'ast>>]) {
+        for item in items {
+            match item.value {
+                Item::Type(..) => (),
+                Item::Value(id, _, expr) => {
+                    let label = self.new_label(id.ast_id);
+                    let body = self.lower_expr(expr);
+                    self.push_item(label, body);
+                }
+                Item::Mod(_, mexpr) => self.lower_mod_expr(mexpr),
+            }
         }
     }
 
@@ -156,17 +149,17 @@ impl<'hir> LoweringContext<'hir> {
     // single HIR bind can produce multiple MIR binds.
     fn lower_bind(
         &mut self,
-        pat: &'hir Pat<'hir>,
-        expr: &'hir Expr<'hir>,
+        pat: &'ast ast::Pat<'ast>,
+        expr: &'ast ast::Expr<'ast>,
     ) -> Vec<(Label, mir::Expr)> {
         match pat.kind {
             PatKind::Wild => {
                 // TODO. unused label.
                 vec![(self.next_label(), self.lower_expr(expr))]
             }
-            PatKind::Var(path) => {
-                let label = self.insert_hir_id(path.res().hir_id());
-                self.local_to_label.insert(path.id(), label);
+            PatKind::Var(id) => {
+                let label = self.new_label(id.ast_id);
+                self.local_to_label.insert(id.ident, label);
                 vec![(label, self.lower_expr(expr))]
             }
             PatKind::Ann(p, _) => self.lower_bind(p, expr),
@@ -178,12 +171,11 @@ impl<'hir> LoweringContext<'hir> {
                 let expr = match expr.kind {
                     ExprKind::Path(_) | ExprKind::Lit(_) => expr,
                     _ => {
-                        let (path, label) = self.insert_temp(todo!());
+                        let (temp, label) = self.insert_temp();
                         split.push((label, self.lower_expr(expr)));
-                        self.hir_ctxt.expr_alloc(ExprKind::Path(path), path.span())
+                        temp
                     }
                 };
-
                 for (i, p) in ps.iter().enumerate() {
                     let mut binds = self.lower_bind(p, expr);
                     for (_, bound) in &mut binds {
@@ -204,9 +196,9 @@ impl<'hir> LoweringContext<'hir> {
 
     pub fn preprocess_case(
         &mut self,
-        scrutinee: &'hir Expr<'hir>,
-        arms: &'hir [CaseArm<'hir>],
-    ) -> (Label, Ident, &'hir [CaseArm<'hir>]) {
+        scrutinee: &'ast ast::Expr<'ast>,
+        arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
+    ) -> (Label, Ident, &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)]) {
         // Hoist the scrutinee in order to eliminate variable-only patterns in case arms.
         // For example,
         //
@@ -223,54 +215,62 @@ impl<'hir> LoweringContext<'hir> {
         //
         // There is no need to hoist paths, since we can just replace them directly with labels.
 
-        fn hoist_scrutinee<'a>(
-            ctx: &mut LoweringContext<'a>,
-            scrutinee: Expr<'a>,
-        ) -> (Label, Expr<'a>, Ident) {
-            if let ExprKind::Path(path) = scrutinee.kind
-                && let Some(id) = path.as_ident()
-                && let Some(label) = ctx.get_path_label_opt(path)
-            {
-                return (label, scrutinee, id);
-            }
-            let typ = ctx
-                .hir_ctxt
-                .get_type(todo!())
-                .unwrap_or_else(|| panic!("no type for {scrutinee}"));
-            let (path, label) = ctx.insert_temp(typ);
-            let hoisted_scrutinee = ctx.hir_ctxt.expr(ExprKind::Path(path), path.span());
-            (label, hoisted_scrutinee, path.id())
-        }
+        // fn hoist_scrutinee<'ast>(
+        //     ctx: &mut LoweringContext<'ast, '_>,
+        //     scrutinee: &'ast ast::Expr<'ast>,
+        // ) -> (Label, &'ast ast::Expr<'ast>, Ident) {
+        //     if let ExprKind::Path(path) = scrutinee.kind
+        //         && let Some(id) = path.as_ident()
+        //         && let Some(label) = ctx.get_path_label_opt(path)
+        //     {
+        //         return (label, scrutinee, id);
+        //     }
+        //     let (temp, label) = ctx.insert_temp();
+        //     (label, temp, path.id())
+        // }
 
-        let (label, hoisted_scrutinee, id) = hoist_scrutinee(self, *scrutinee);
-        let mut new_arms = Vec::with_capacity(arms.len());
-        for (pat, body) in arms {
-            new_arms.push(if let PatKind::Var(..) = pat.kind {
-                let body = self.hir_ctxt.expr(
-                    ExprKind::Let(
-                        &*self
-                            .hir_ctxt
-                            .arena
-                            .alloc_from_iter([(*pat, hoisted_scrutinee)]),
-                        body,
-                    ),
-                    body.span,
-                );
-                (self.hir_ctxt.pat(PatKind::Wild, pat.span), body)
-            } else {
-                (*pat, *body)
-            });
-        }
-        (label, id, self.hir_ctxt.arena.alloc_from_iter(new_arms))
+        // let (label, hoisted_scrutinee, id) = hoist_scrutinee(self, scrutinee);
+        // let mut new_arms = Vec::with_capacity(arms.len());
+        // for (pat, body) in arms {
+        //     new_arms.push(if let PatKind::Var(..) = pat.kind {
+        //         let body = self.syntax_arena.expr(
+        //             ExprKind::Let(
+        //                 &*self
+        //                     .syntax_arena
+        //                     .arena
+        //                     .alloc_from_iter([(*pat, hoisted_scrutinee)]),
+        //                 body,
+        //             ),
+        //             body.span,
+        //         );
+        //         (self.syntax_arena.pat(PatKind::Wild, pat.span), body)
+        //     } else {
+        //         (*pat, *body)
+        //     });
+        // }
+        // (label, id, self.syntax_arena.arena.alloc_from_iter(new_arms))
+        todo!()
     }
 
-    fn lower_expr(&mut self, expr: &'hir Expr<'hir>) -> mir::Expr {
+    fn lower_lit(&self, lit: ast::Lit) -> mir::Lit {
+        match lit {
+            ast::Lit::Unit => mir::Lit::Unit,
+            ast::Lit::Bool(b) => mir::Lit::Bool(b),
+            ast::Lit::Int32(s) => {
+                mir::Lit::Int32(i32::from_str_radix(&s.as_str().replace("_", ""), 10).unwrap())
+            }
+            ast::Lit::Str(s) => mir::Lit::Str(s),
+        }
+    }
+
+    fn lower_expr(&mut self, expr: &'ast ast::Expr<'ast>) -> mir::Expr {
+        use ast::ExprKind;
         match expr.kind {
             ExprKind::Path(p) | ExprKind::Constructor(p) => {
-                mir::Expr::Label(self.get_path_label(p))
+                mir::Expr::Label(self.get_label(p.ast_id))
             }
-            ExprKind::External(s, _) => mir::Expr::External(s),
-            ExprKind::Lit(l) => mir::Expr::Lit(l),
+            ExprKind::External(s) => mir::Expr::External(s.sym),
+            ExprKind::Lit(l) => mir::Expr::Lit(self.lower_lit(l)),
             ExprKind::Tuple(es) => {
                 mir::Expr::Tuple(es.iter().map(|e| self.lower_expr(e)).collect())
             }
@@ -294,7 +294,7 @@ impl<'hir> LoweringContext<'hir> {
                     mir::Expr::Let(bind.0, Box::new(bind.1), Box::new(acc))
                 })
             }
-            ExprKind::Call(_u, e, args) => {
+            ExprKind::Call(e, args) => {
                 // Lower (f e1 ... en) to
                 // let l1 = lower(e1) in ... let ln = lower(en) in (f l1 ... ln).
                 // If lower(ei) is already a label or literal, don't add a superfluous bind.
@@ -331,7 +331,7 @@ impl<'hir> LoweringContext<'hir> {
         }
     }
 
-    fn lower_lambda(&mut self, lambda: &'hir Lambda<'hir>) -> mir::Expr {
+    fn lower_lambda(&mut self, lambda: ast::Lambda<'ast>) -> mir::Expr {
         //
         // \p1 .. pn -> e ~>
         //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
@@ -341,25 +341,25 @@ impl<'hir> LoweringContext<'hir> {
         for &arg in lambda.args {
             let label = match arg.kind {
                 PatKind::Wild => self.next_label(),
-                PatKind::Var(path) => {
-                    let label = self.insert_hir_id(path.res().hir_id());
-                    self.local_to_label.insert(path.id(), label);
+                PatKind::Var(id) => {
+                    let label = self.next_label();
+                    self.local_to_label.insert(id.ident, label);
                     label
                 }
                 PatKind::Lit(_) => unreachable!("literal in lambda pattern"),
                 _ => {
-                    let (path, label) = self.insert_temp(todo!());
-                    let expr = self.hir_ctxt.expr(ExprKind::Path(path), Span::dummy());
-                    binds.push((arg, expr));
+                    let (temp, label) = self.insert_temp();
+                    binds.push((arg, *temp));
                     label
                 }
             };
             args.push(label);
         }
-        let body = self.hir_ctxt.expr_alloc(
-            ExprKind::Let(self.hir_ctxt.arena.alloc_from_iter(binds), lambda.body),
+        let body = self.syntax_arena.alloc(ast::Expr::new(
+            ast::ExprKind::Let(self.syntax_arena.alloc_from_iter(binds), lambda.body),
             lambda.body.span,
-        );
+            AstId::ZERO,
+        ));
         let body = self.lower_expr(body);
         mir::Expr::Lambda(args, Box::new(body))
     }

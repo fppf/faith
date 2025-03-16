@@ -6,6 +6,7 @@ use span::diag;
 pub enum Pass {
     Parse,
     Infer,
+    Mir,
 }
 
 pub enum Source {
@@ -47,11 +48,14 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
     }
 
     let ctxt = infer::ty::TyCtxt::default();
-    infer::infer_program_in(&ctxt, program)?;
+    let (res, env) = infer::infer_program_in(&ctxt, program)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
+
+    let mir = mir::lower(&syntax_arena, program, res, env);
+    println!("{mir}");
 
     Ok(())
 }

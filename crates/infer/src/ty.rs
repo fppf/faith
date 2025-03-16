@@ -9,7 +9,10 @@ use span::Ident;
 
 use crate::resolve::Res;
 
-base::declare_arena!('t, []);
+base::declare_arena!('t, [
+    resolution: crate::Resolution<'t>,
+    environment: crate::Environment<'t>,
+]);
 
 #[derive(Default)]
 pub struct TyCtxt<'t> {

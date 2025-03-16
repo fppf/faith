@@ -31,7 +31,7 @@ pub enum Expr {
     Proj(Box<Expr>, usize),
     Unwrap(Box<Expr>),
     External(Sym),
-    Lit(hir::Lit),
+    Lit(Lit),
     Lambda(Vec<Label>, Box<Expr>),
     App(Box<Expr>, Vec<Expr>),
     Tuple(Vec<Expr>),
@@ -41,4 +41,12 @@ pub enum Expr {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Dup(Box<Expr>),
     Drop(Box<Expr>),
+}
+
+#[derive(Clone, Debug)]
+pub enum Lit {
+    Unit,
+    Bool(bool),
+    Int32(i32),
+    Str(Sym),
 }

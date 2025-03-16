@@ -3,7 +3,6 @@ use std::{
     collections::hash_map::Entry,
     fmt,
     hash::Hash,
-    marker::PhantomData,
     ops::{Index, IndexMut},
 };
 
@@ -67,13 +66,13 @@ impl fmt::Display for Res {
 pub fn resolve_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-) -> Result<Resolution<'ast, 't>, Diagnostic> {
+) -> Result<Resolution<'t>, Diagnostic> {
     Resolver::new(ctxt, program)
         .resolve()
         .map_err(Diagnostic::from)
 }
 
-pub struct Resolution<'ast, 't> {
+pub struct Resolution<'t> {
     pub last_res_id: ResId,
     pub res: Map<AstId, Res>,
     pub values: Map<ResId, Value<'t>>,
@@ -81,10 +80,9 @@ pub struct Resolution<'ast, 't> {
     pub types: Map<ResId, Ty<'t>>,
     pub variants: Map<ResId, Set<Res>>,
     pub annotations: Map<AstId, Ty<'t>>,
-    _marker: PhantomData<&'ast Expr<'ast>>,
 }
 
-impl Index<AstId> for Resolution<'_, '_> {
+impl Index<AstId> for Resolution<'_> {
     type Output = Res;
 
     fn index(&self, ast_id: AstId) -> &Self::Output {
@@ -291,7 +289,7 @@ struct Resolver<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
 
-    res: Resolution<'ast, 't>,
+    res: Resolution<'t>,
 
     // The graph of modules.
     modules: IndexVec<ModuleId, Module>,
@@ -322,7 +320,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 types: Map::default(),
                 variants: Map::default(),
                 annotations: Map::default(),
-                _marker: PhantomData,
             },
             modules,
             imports: Map::default(),
@@ -332,7 +329,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
         }
     }
 
-    fn resolve(mut self) -> Result<Resolution<'ast, 't>, ResolveError> {
+    fn resolve(mut self) -> Result<Resolution<'t>, ResolveError> {
         self.with_module(self.current_module_id, |self_| {
             self_.resolve_items(self.program.unit.items)?;
             self_.resolve_expr(self.program.main)

@@ -3,7 +3,10 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::mir::{Expr, Label, Module};
+use crate::{
+    Lit,
+    mir::{Expr, Label, Module},
+};
 
 use base::pp::*;
 
@@ -22,6 +25,17 @@ impl fmt::Display for Expr {
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         MirPrinter::to_string(|p| p.print_module(self)).fmt(f)
+    }
+}
+
+impl fmt::Display for Lit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Lit::Unit => "()".fmt(f),
+            Lit::Bool(b) => b.fmt(f),
+            Lit::Int32(n) => n.fmt(f),
+            Lit::Str(s) => write!(f, "\"{s}\""),
+        }
     }
 }
 

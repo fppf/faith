@@ -7,5 +7,6 @@ authors = ["ryn <ryn@fppf.site>"]
 [dependencies]
 base = { path = "../base" }
 span = { path = "../span" }
-infer = { path = "../infer" }
 log = { path = "../log" }
+syntax = { path = "../syntax" }
+infer = { path = "../infer" }

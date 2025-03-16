@@ -21,23 +21,24 @@ pub use resolve::{Constructor, Res, ResId, Resolution, Value};
 pub fn infer_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-) -> Result<(), Diagnostic> {
+) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), Diagnostic> {
     let res = resolve::resolve_program_in(ctxt, program)?;
-    Infer::new(ctxt, program, &res)
+    let res = ctxt.arena.alloc(res);
+    Infer::new(ctxt, program, res)
         .infer()
         .map_err(Diagnostic::from)
 }
 
 #[derive(Default)]
-struct Environment<'t> {
-    res: Map<Res, Ty<'t>>,
-    ast: Map<AstId, Ty<'t>>,
+pub struct Environment<'t> {
+    pub res: Map<Res, Ty<'t>>,
+    pub ast: Map<AstId, Ty<'t>>,
 }
 
 struct Infer<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-    res: &'t Resolution<'ast, 't>,
+    res: &'t Resolution<'t>,
     env: Environment<'t>,
     subs: Substitution<'t>,
 
@@ -47,11 +48,7 @@ struct Infer<'ast, 't> {
 }
 
 impl<'ast, 't> Infer<'ast, 't> {
-    fn new(
-        ctxt: &'t TyCtxt<'t>,
-        program: &'ast Program<'ast>,
-        res: &'t Resolution<'ast, 't>,
-    ) -> Self {
+    fn new(ctxt: &'t TyCtxt<'t>, program: &'ast Program<'ast>, res: &'t Resolution<'t>) -> Self {
         Self {
             ctxt,
             program,
@@ -65,11 +62,11 @@ impl<'ast, 't> Infer<'ast, 't> {
         }
     }
 
-    fn infer(mut self) -> Result<(), InferError<'t>> {
+    fn infer(mut self) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), InferError<'t>> {
         self.infer_comp_unit(self.program.unit)?;
         let main_ty = self.infer_expr(self.program.main)?;
         log::trace!("main : {main_ty}");
-        Ok(())
+        Ok((self.res, self.ctxt.arena.alloc(self.env)))
     }
 
     fn type_from_lit(&self, lit: Lit) -> Ty<'t> {

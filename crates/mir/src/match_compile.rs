@@ -1,6 +1,6 @@
 use base::hash::Map;
-use hir::{CaseArm, Expr, Pat, PatKind};
 use span::Ident;
+use syntax::ast;
 
 use crate::{lower::LoweringContext, mir::Label};
 
@@ -110,24 +110,24 @@ pub enum Constructor {
 }
 
 #[derive(Default)]
-struct Matrix<'hir> {
-    clauses: Vec<Clause<'hir>>,
+struct Matrix<'ast> {
+    clauses: Vec<Clause<'ast>>,
 }
 
 // A list of tests and the corresponding action.
-struct Clause<'hir> {
-    tests: Vec<Test<'hir>>,
+struct Clause<'ast> {
+    tests: Vec<Test<'ast>>,
     body: Body,
 }
 
 // Test a variable against a pattern (id is pat).
-struct Test<'hir> {
+struct Test<'ast> {
     id: Ident,
-    pat: &'hir Pat<'hir>,
+    pat: &'ast ast::Pat<'ast>,
 }
 
-impl<'hir> Test<'hir> {
-    fn new(id: Ident, pat: &'hir Pat<'hir>) -> Self {
+impl<'ast> Test<'ast> {
+    fn new(id: Ident, pat: &'ast ast::Pat<'ast>) -> Self {
         Test { id, pat }
     }
 }
@@ -146,8 +146,8 @@ impl Body {
     }
 }
 
-impl<'hir> Matrix<'hir> {
-    fn new_from_case(scrutinee_id: Ident, arms: &'hir [CaseArm<'hir>]) -> Self {
+impl<'ast> Matrix<'ast> {
+    fn new_from_case(scrutinee_id: Ident, arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)]) -> Self {
         Self {
             clauses: arms
                 .iter()
@@ -178,8 +178,8 @@ impl<'hir> Matrix<'hir> {
     fn bind_variable_patterns(&mut self) {
         for row in self.clauses.iter_mut() {
             row.tests.retain(|e| {
-                if let PatKind::Var(path) = e.pat.kind {
-                    row.body.bindings.push((path.id(), e.id));
+                if let ast::PatKind::Var(id) = e.pat.kind {
+                    row.body.bindings.push((id.ident, e.id));
                     false
                 } else {
                     true
@@ -189,19 +189,21 @@ impl<'hir> Matrix<'hir> {
     }
 }
 
-impl<'hir> LoweringContext<'hir> {
+impl<'ast> LoweringContext<'ast, '_> {
     pub fn match_compile(
         &mut self,
-        scrutinee: &'hir Expr<'hir>,
-        arms: &'hir [CaseArm<'hir>],
+        scrutinee: &'ast ast::Expr<'ast>,
+        arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
     ) -> (Label, DecisionTree) {
-        let (label, scrutinee_id, arms) = self.preprocess_case(scrutinee, arms);
-        let mut matrix = Matrix::new_from_case(scrutinee_id, arms);
-        let tree = self.compile(&mut matrix);
-        (label, tree)
+        (Label::ZERO, DecisionTree::Fail)
+
+        // let (label, scrutinee_id, arms) = self.preprocess_case(scrutinee, arms);
+        // let mut matrix = Matrix::new_from_case(scrutinee_id, arms);
+        // let tree = self.compile(&mut matrix);
+        // (label, tree)
     }
 
-    fn compile(&mut self, matrix: &mut Matrix<'hir>) -> DecisionTree {
+    fn compile(&mut self, matrix: &mut Matrix<'ast>) -> DecisionTree {
         // If the matrix has no rows, then we vacuously fail.
         if matrix.clauses.is_empty() {
             return DecisionTree::Fail;
@@ -219,7 +221,7 @@ impl<'hir> LoweringContext<'hir> {
             .branch_variable()
             .expect("could not get branching var");
 
-        let label = self.get_local_label(branch_var);
+        let label = self.local_to_label[&branch_var];
 
         let branch_var_typ = self.get_label_type(label);
         /*self
@@ -234,9 +236,7 @@ impl<'hir> LoweringContext<'hir> {
         DecisionTree::Switch(label, cases, None)
     }
 
-    fn specialize(&self, id: Ident, matrix: &Matrix<'hir>) -> Matrix<'hir> {
-        let (arity, typ): (usize, hir::Ty<'hir>) = todo!();
-
+    fn specialize(&self, id: Ident, matrix: &Matrix<'ast>) -> Matrix<'ast> {
         let mut matrix = Matrix::default();
 
         for row in &matrix.clauses {}
