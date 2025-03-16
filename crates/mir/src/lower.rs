@@ -342,7 +342,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             let label = match arg.kind {
                 PatKind::Wild => self.next_label(),
                 PatKind::Var(id) => {
-                    let label = self.next_label();
+                    let label = self.new_label(id.ast_id);
                     self.local_to_label.insert(id.ident, label);
                     label
                 }
