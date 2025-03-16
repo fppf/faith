@@ -25,7 +25,7 @@ pub(crate) struct LoweringContext<'ast, 't> {
     res_to_label: Map<ResId, Label>,
     label_to_res: Map<Label, ResId>,
     label_to_type: Map<Label, Ty<'t>>,
-    pub local_to_label: Map<Ident, Label>,
+    temporaries: Map<Ident, Label>,
     label: Label,
     program: &'ast ast::Program<'ast>,
     syntax_arena: &'ast syntax::Arena<'ast>,
@@ -45,7 +45,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             res_to_label: Map::default(),
             label_to_res: Map::default(),
             label_to_type: Map::default(),
-            local_to_label: Map::default(),
+            temporaries: Map::default(),
             label: MAIN_LABEL.plus(1),
             program,
             syntax_arena,
@@ -66,7 +66,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             Sym::intern(&format!("~tmp{}", label.index())),
             Span::dummy(),
         );
-        self.local_to_label.insert(id, label);
+        self.temporaries.insert(id, label);
         let expr = self.syntax_arena.alloc(ast::Expr::new(
             ast::ExprKind::Path(ast::Path::new(id, &[], Span::dummy(), AstId::ZERO)),
             Span::dummy(),
@@ -84,8 +84,12 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         label
     }
 
-    fn get_label(&self, ast_id: AstId) -> Label {
-        let res = self.resolution[ast_id];
+    fn get_label(&self, path: ast::Path<'ast>) -> Label {
+        if path.ast_id == AstId::ZERO {
+            let id = path.as_ident().unwrap();
+            return self.temporaries[&id.ident];
+        }
+        let res = self.resolution[path.ast_id];
         log::trace!("get_label {res}");
         self.res_to_label[&res.res_id()]
     }
@@ -145,8 +149,8 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
     }
 
     // Recursively construct a sequence of lowered binds representing the original
-    // HIR bind `pat = expr`. Since we completely eliminate compound patterns, a
-    // single HIR bind can produce multiple MIR binds.
+    // bind `pat = expr`. Since we completely eliminate compound patterns, a
+    // single higher-level bind can produce multiple lowered binds.
     fn lower_bind(
         &mut self,
         pat: &'ast ast::Pat<'ast>,
@@ -159,14 +163,12 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             }
             PatKind::Var(id) => {
                 let label = self.new_label(id.ast_id);
-                self.local_to_label.insert(id.ident, label);
                 vec![(label, self.lower_expr(expr))]
             }
             PatKind::Ann(p, _) => self.lower_bind(p, expr),
             PatKind::Lit(_) => unreachable!("literal in binding pattern"),
             PatKind::Tuple(ps) => {
                 let mut split = Vec::new();
-
                 // Hoist bound expr if it is not a path or literal.
                 let expr = match expr.kind {
                     ExprKind::Path(_) | ExprKind::Lit(_) => expr,
@@ -266,9 +268,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
     fn lower_expr(&mut self, expr: &'ast ast::Expr<'ast>) -> mir::Expr {
         use ast::ExprKind;
         match expr.kind {
-            ExprKind::Path(p) | ExprKind::Constructor(p) => {
-                mir::Expr::Label(self.get_label(p.ast_id))
-            }
+            ExprKind::Path(p) | ExprKind::Constructor(p) => mir::Expr::Label(self.get_label(p)),
             ExprKind::External(s) => mir::Expr::External(s.sym),
             ExprKind::Lit(l) => mir::Expr::Lit(self.lower_lit(l)),
             ExprKind::Tuple(es) => {
@@ -277,7 +277,33 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             ExprKind::Vector(es) => {
                 mir::Expr::Vector(es.iter().map(|e| self.lower_expr(e)).collect())
             }
-            ExprKind::Lambda(lambda) => self.lower_lambda(lambda),
+            ExprKind::Lambda(lambda) => {
+                // \p1 .. pn -> e ~>
+                //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
+                let mut args = Vec::with_capacity(lambda.args.len());
+                let mut binds = Vec::new();
+                for &arg in lambda.args {
+                    let label = match arg.kind {
+                        PatKind::Wild => self.next_label(),
+                        PatKind::Var(id) => self.new_label(id.ast_id),
+                        PatKind::Lit(_) => unreachable!("literal in lambda pattern"),
+                        PatKind::Or(_) => unreachable!("or pattern in lambda pattern"),
+                        _ => {
+                            let (temp, label) = self.insert_temp();
+                            binds.push((arg, *temp));
+                            label
+                        }
+                    };
+                    args.push(label);
+                }
+                let body = self.syntax_arena.alloc(ast::Expr::new(
+                    ast::ExprKind::Let(self.syntax_arena.alloc_from_iter(binds), lambda.body),
+                    lambda.body.span,
+                    AstId::ZERO,
+                ));
+                let body = self.lower_expr(body);
+                mir::Expr::Lambda(args, Box::new(body))
+            }
             ExprKind::Ann(e, _) => self.lower_expr(e),
             ExprKind::If(cond, e1, e2) => mir::Expr::If(
                 Box::new(self.lower_expr(cond)),
@@ -290,9 +316,12 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                     new_binds.extend(self.lower_bind(p, e));
                 }
                 let body = self.lower_expr(body);
-                new_binds.into_iter().rev().fold(body, |acc, bind| {
-                    mir::Expr::Let(bind.0, Box::new(bind.1), Box::new(acc))
-                })
+                new_binds
+                    .into_iter()
+                    .rev()
+                    .fold(body, |acc, (label, expr)| {
+                        mir::Expr::Let(label, Box::new(expr), Box::new(acc))
+                    })
             }
             ExprKind::Call(e, args) => {
                 // Lower (f e1 ... en) to
@@ -329,38 +358,5 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 )
             }
         }
-    }
-
-    fn lower_lambda(&mut self, lambda: ast::Lambda<'ast>) -> mir::Expr {
-        //
-        // \p1 .. pn -> e ~>
-        //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
-        //
-        let mut args = Vec::with_capacity(lambda.args.len());
-        let mut binds = Vec::new();
-        for &arg in lambda.args {
-            let label = match arg.kind {
-                PatKind::Wild => self.next_label(),
-                PatKind::Var(id) => {
-                    let label = self.new_label(id.ast_id);
-                    self.local_to_label.insert(id.ident, label);
-                    label
-                }
-                PatKind::Lit(_) => unreachable!("literal in lambda pattern"),
-                _ => {
-                    let (temp, label) = self.insert_temp();
-                    binds.push((arg, *temp));
-                    label
-                }
-            };
-            args.push(label);
-        }
-        let body = self.syntax_arena.alloc(ast::Expr::new(
-            ast::ExprKind::Let(self.syntax_arena.alloc_from_iter(binds), lambda.body),
-            lambda.body.span,
-            AstId::ZERO,
-        ));
-        let body = self.lower_expr(body);
-        mir::Expr::Lambda(args, Box::new(body))
     }
 }

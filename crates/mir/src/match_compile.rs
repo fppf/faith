@@ -221,7 +221,7 @@ impl<'ast> LoweringContext<'ast, '_> {
             .branch_variable()
             .expect("could not get branching var");
 
-        let label = self.local_to_label[&branch_var];
+        let label = todo!();
 
         let branch_var_typ = self.get_label_type(label);
         /*self
