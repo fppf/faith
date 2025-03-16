@@ -67,7 +67,8 @@ impl<'ast, 't> Infer<'ast, 't> {
 
     fn infer(mut self) -> Result<(), InferError<'t>> {
         self.infer_comp_unit(self.program.unit)?;
-        self.infer_expr(self.program.main)?;
+        let main_ty = self.infer_expr(self.program.main)?;
+        log::trace!("main : {main_ty}");
         Ok(())
     }
 
@@ -253,28 +254,33 @@ impl<'ast, 't> Infer<'ast, 't> {
 
     fn infer_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let ty = match expr.kind {
-            // NB. Applications are either function calls (such as `(f a b ...)`)
-            //     or "0-arity" applications, i.e., paths.
             ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
                 let (head, args) = match expr.kind {
                     ExprKind::Call(head, args) => (head, args),
                     ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[] as &[_]),
                     _ => unreachable!(),
                 };
-                let mut ty = match head.kind {
-                    ExprKind::Path(p) => self.infer_path(p),
+                let head_ty = match head.kind {
+                    ExprKind::Path(p) => {
+                        // FIXME query defining span
+                        let res = self.res[p.ast_id];
+                        Ok(self.env.res[&res])
+                    }
                     ExprKind::Constructor(p) => self.infer_constructor(p),
                     _ => self.infer_expr(head),
                 }?;
+                let mut arg_tys = Vec::new();
                 for arg in args {
-                    if let TyKind::Arrow(arg_ty, ret_ty) = *ty.kind() {
-                        self.check_expr(arg, arg_ty, Origin::Generic(arg.span, arg.span))?;
-                        ty = ret_ty;
-                    } else {
-                        break;
-                    }
+                    let arg_ty = self.infer_expr(arg)?;
+                    arg_tys.push(arg_ty);
                 }
-                ty
+                let ret_ty = self.fresh_var();
+                self.eq(
+                    Origin::Generic(head.span, Span::dummy()),
+                    Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                    head_ty,
+                )?;
+                ret_ty
             }
             ExprKind::External(_) => unreachable!(),
             ExprKind::Lit(l) => self.type_from_lit(l),
@@ -319,10 +325,6 @@ impl<'ast, 't> Infer<'ast, 't> {
                 }
                 Ty::new(self.ctxt, TyKind::Vector(vector_base_ty))
             }
-            ExprKind::Seq(e1, e2) => {
-                self.check_expr(e1, self.unit_ty, Origin::Seq(e1.span))?;
-                self.infer_expr(e2)?
-            }
             ExprKind::Case(scrutinee, arms) => {
                 let scrutinee_ty = self.infer_expr(scrutinee)?;
                 let var = self.fresh_var();
@@ -349,15 +351,13 @@ impl<'ast, 't> Infer<'ast, 't> {
                 )?;
                 then_ty
             }
+            ExprKind::Seq(e1, e2) => {
+                self.check_expr(e1, self.unit_ty, Origin::Seq(e1.span))?;
+                self.infer_expr(e2)?
+            }
         };
         self.env.ast.insert(expr.ast_id, ty);
         Ok(ty)
-    }
-
-    /// Infer the type of a path by looking it up in the environment.
-    fn infer_path(&self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let res = self.res[path.ast_id];
-        Ok(self.env.res[&res])
     }
 
     fn infer_constructor(&self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {

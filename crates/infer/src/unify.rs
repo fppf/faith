@@ -17,7 +17,7 @@ pub enum Origin {
 
 impl<'t> Infer<'_, 't> {
     pub fn eq(&mut self, origin: Origin, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), InferError<'t>> {
-        log::trace!("[eq] {lhs} ~ {rhs}");
+        log::trace!("[eq] {lhs} ~ {rhs} @ {:?}", origin);
         let lhs = self.instantiate(lhs);
         let rhs = self.instantiate(rhs);
         Unifier {
@@ -41,10 +41,10 @@ impl<'t> Unifier<'_, '_, 't> {
         let rhs = self.infer.subs.real(rhs);
         log::trace!("    [real] {lhs} ~ {rhs}");
         match (lhs.as_var(), rhs.as_var()) {
-            (_, Some(_)) => self.infer.subs.union(rhs, lhs).map_err(|(v, t)| {
+            (Some(_), _) => self.infer.subs.union(lhs, rhs).map_err(|(v, t)| {
                 TypeUnifyError::new(TypeUnifyErrorKind::Occurs(v, t), self.origin)
             }),
-            (Some(_), _) => self.infer.subs.union(lhs, rhs).map_err(|(v, t)| {
+            (_, Some(_)) => self.infer.subs.union(rhs, lhs).map_err(|(v, t)| {
                 TypeUnifyError::new(TypeUnifyErrorKind::Occurs(v, t), self.origin)
             }),
             (None, None) => match (*lhs.kind(), *rhs.kind()) {
