@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    Lit,
+    Lit, Value,
     mir::{Expr, Label, Module},
 };
 
@@ -79,11 +79,17 @@ impl MirPrinter {
         self.word(label.to_string());
     }
 
+    fn print_value(&mut self, value: &Value) {
+        match value {
+            Value::Label(l) => self.print_label(*l),
+            Value::Lit(l) => self.word(l.to_string()),
+        }
+    }
+
     fn print_expr(&mut self, expr: &Expr) {
         self.ibox(INDENT);
         match expr {
-            Expr::Label(l) => self.print_label(*l),
-            Expr::Lit(l) => self.word(l.to_string()),
+            Expr::Value(v) => self.print_value(v),
             Expr::External(s) => {
                 self.word("external");
                 self.space();
@@ -129,12 +135,12 @@ impl MirPrinter {
                 self.word_space("->");
                 self.print_expr(body);
             }
-            Expr::App(h, args) => {
+            Expr::Call(f, args) => {
                 self.word("(");
-                self.print_expr(h);
+                self.print_label(*f);
                 self.space();
                 self.strsep("", false, Breaks::Inconsistent, args, |pp, e| {
-                    pp.print_expr(e)
+                    pp.print_value(e)
                 });
                 self.word(")");
             }

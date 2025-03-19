@@ -1,12 +1,10 @@
-use core::panic;
-
 use base::{hash::Map, index::Idx};
 use infer::{Environment, Res, ResId, Resolution, ty::Ty};
 use span::{Ident, Sp, Span, Sym};
 use syntax::ast::{self, AstId, ExprKind, Item, PatKind};
 
 use crate::{
-    MAIN_LABEL, Module,
+    MAIN_LABEL, Module, Value,
     mir::{self, Label},
 };
 
@@ -168,6 +166,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             PatKind::Ann(p, _) => self.lower_bind(p, expr),
             PatKind::Lit(_) => unreachable!("literal in binding pattern"),
             PatKind::Tuple(ps) => {
+                // TODO. special handling for (x1, ..., xn) = (e1, ..., en) ?
                 let mut split = Vec::new();
                 // Hoist bound expr if it is not a path or literal.
                 let expr = match expr.kind {
@@ -200,7 +199,11 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         &mut self,
         scrutinee: &'ast ast::Expr<'ast>,
         arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
-    ) -> (Label, Ident, &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)]) {
+    ) -> (
+        Label,
+        &'ast ast::Expr<'ast>,
+        &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
+    ) {
         // Hoist the scrutinee in order to eliminate variable-only patterns in case arms.
         // For example,
         //
@@ -217,21 +220,13 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         //
         // There is no need to hoist paths, since we can just replace them directly with labels.
 
-        // fn hoist_scrutinee<'ast>(
-        //     ctx: &mut LoweringContext<'ast, '_>,
-        //     scrutinee: &'ast ast::Expr<'ast>,
-        // ) -> (Label, &'ast ast::Expr<'ast>, Ident) {
-        //     if let ExprKind::Path(path) = scrutinee.kind
-        //         && let Some(id) = path.as_ident()
-        //         && let Some(label) = ctx.get_path_label_opt(path)
-        //     {
-        //         return (label, scrutinee, id);
-        //     }
-        //     let (temp, label) = ctx.insert_temp();
-        //     (label, temp, path.id())
-        // }
+        let (scrutinee, label) = if let ExprKind::Path(path) = scrutinee.kind {
+            (scrutinee, self.get_label(path))
+        } else {
+            self.insert_temp()
+        };
 
-        // let (label, hoisted_scrutinee, id) = hoist_scrutinee(self, scrutinee);
+        (label, scrutinee, arms)
         // let mut new_arms = Vec::with_capacity(arms.len());
         // for (pat, body) in arms {
         //     new_arms.push(if let PatKind::Var(..) = pat.kind {
@@ -251,7 +246,6 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         //     });
         // }
         // (label, id, self.syntax_arena.arena.alloc_from_iter(new_arms))
-        todo!()
     }
 
     fn lower_lit(&self, lit: ast::Lit) -> mir::Lit {
@@ -268,9 +262,11 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
     fn lower_expr(&mut self, expr: &'ast ast::Expr<'ast>) -> mir::Expr {
         use ast::ExprKind;
         match expr.kind {
-            ExprKind::Path(p) | ExprKind::Constructor(p) => mir::Expr::Label(self.get_label(p)),
+            ExprKind::Path(p) | ExprKind::Constructor(p) => {
+                mir::Expr::Value(mir::Value::Label(self.get_label(p)))
+            }
+            ExprKind::Lit(l) => mir::Expr::Value(mir::Value::Lit(self.lower_lit(l))),
             ExprKind::External(s) => mir::Expr::External(s.sym),
-            ExprKind::Lit(l) => mir::Expr::Lit(self.lower_lit(l)),
             ExprKind::Tuple(es) => {
                 mir::Expr::Tuple(es.iter().map(|e| self.lower_expr(e)).collect())
             }
@@ -323,23 +319,31 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                         mir::Expr::Let(label, Box::new(expr), Box::new(acc))
                     })
             }
-            ExprKind::Call(e, args) => {
+            ExprKind::Call(f, args) => {
                 // Lower (f e1 ... en) to
                 // let l1 = lower(e1) in ... let ln = lower(en) in (f l1 ... ln).
-                // If lower(ei) is already a label or literal, don't add a superfluous bind.
-                let mut args: Vec<_> = args.iter().map(|arg| self.lower_expr(arg)).collect();
+                // If lower(ei) is already a value, don't add a superfluous bind.
                 let mut binds = Vec::new();
-                for arg in &mut args {
-                    match arg {
-                        mir::Expr::Label(_) | mir::Expr::Lit(_) => (),
-                        _ => {
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|arg| match self.lower_expr(arg) {
+                        mir::Expr::Value(v) => v,
+                        arg => {
                             let label = self.next_label();
                             binds.push((label, arg.clone()));
-                            *arg = mir::Expr::Label(label);
+                            Value::Label(label)
                         }
-                    };
-                }
-                let body = mir::Expr::App(Box::new(self.lower_expr(e)), args);
+                    })
+                    .collect();
+                let f_label = match self.lower_expr(f) {
+                    mir::Expr::Value(Value::Label(label)) => label,
+                    expr => {
+                        let label = self.next_label();
+                        binds.push((label, expr));
+                        label
+                    }
+                };
+                let body = mir::Expr::Call(f_label, args);
                 binds.into_iter().rev().fold(body, |acc, bind| {
                     mir::Expr::Let(bind.0, Box::new(bind.1), Box::new(acc))
                 })
