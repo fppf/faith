@@ -121,8 +121,8 @@ impl MirPrinter {
                 self.break_offset_if_not_bol(1, -INDENT);
                 self.print_expr(e2);
             }
-            Expr::Proj(e, i) => {
-                self.print_expr(e);
+            Expr::Proj(l, i) => {
+                self.print_label(*l);
                 self.word(".");
                 self.word(i.to_string());
             }

@@ -178,9 +178,17 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                     }
                 };
                 for (i, p) in ps.iter().enumerate() {
-                    let mut binds = self.lower_bind(p, expr);
-                    for (_, bound) in &mut binds {
-                        *bound = mir::Expr::Proj(Box::new(bound.clone()), i);
+                    let mut binds = Vec::new();
+                    for (label, bound) in self.lower_bind(p, expr) {
+                        let label2 = match bound {
+                            mir::Expr::Value(Value::Label(l)) => l,
+                            _ => {
+                                let label = self.next_label();
+                                binds.push((label, bound));
+                                label
+                            }
+                        };
+                        binds.push((label, mir::Expr::Proj(label2, i)));
                     }
                     split.extend(binds);
                 }

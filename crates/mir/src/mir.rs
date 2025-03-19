@@ -27,7 +27,7 @@ pub struct Item {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
-    Proj(Box<Expr>, usize),
+    Proj(Label, usize),
     Unwrap(Box<Expr>),
     External(Sym),
     Value(Value),
