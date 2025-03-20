@@ -83,6 +83,12 @@ impl MirPrinter {
         match value {
             Value::Label(l) => self.print_label(*l),
             Value::Lit(l) => self.word(l.to_string()),
+            Value::External(s) => {
+                self.word("external");
+                self.popen();
+                self.word(s.as_str().to_string());
+                self.pclose();
+            }
         }
     }
 
@@ -90,11 +96,6 @@ impl MirPrinter {
         self.ibox(INDENT);
         match expr {
             Expr::Value(v) => self.print_value(v),
-            Expr::External(s) => {
-                self.word("external");
-                self.space();
-                self.word(s.as_str().to_string());
-            }
             Expr::Tuple(vs) => {
                 self.popen();
                 self.strsep(",", false, Breaks::Inconsistent, vs, |pp, v| {

@@ -29,7 +29,6 @@ pub struct Item {
 pub enum Expr {
     Proj(Label, usize),
     Unwrap(Box<Expr>),
-    External(Sym),
     Value(Value),
     Lambda(Vec<Label>, Box<Expr>),
     Call(Label, Vec<Value>),
@@ -42,13 +41,14 @@ pub enum Expr {
     Drop(Box<Expr>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Value {
     Lit(Lit),
     Label(Label),
+    External(Sym),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Lit {
     Unit,
     Bool(bool),

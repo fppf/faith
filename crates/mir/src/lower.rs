@@ -241,10 +241,10 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         use ast::ExprKind;
         match expr.kind {
             ExprKind::Path(p) | ExprKind::Constructor(p) => {
-                mir::Expr::Value(mir::Value::Label(self.get_label(p)))
+                mir::Expr::Value(Value::Label(self.get_label(p)))
             }
-            ExprKind::Lit(l) => mir::Expr::Value(mir::Value::Lit(self.lower_lit(l))),
-            ExprKind::External(s) => mir::Expr::External(s.sym),
+            ExprKind::Lit(l) => mir::Expr::Value(Value::Lit(self.lower_lit(l))),
+            ExprKind::External(s) => mir::Expr::Value(Value::External(s.sym)),
             ExprKind::Tuple(es) => {
                 let mut binds = Vec::new();
                 let es: Vec<_> = es
