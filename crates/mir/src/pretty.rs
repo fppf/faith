@@ -164,9 +164,6 @@ impl MirPrinter {
                 self.word(" else ");
                 self.print_expr(e2);
             }
-            Expr::Unwrap(..) => todo!(),
-            Expr::Dup(..) => todo!(),
-            Expr::Drop(..) => todo!(),
         }
         self.end();
     }

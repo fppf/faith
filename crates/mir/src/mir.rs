@@ -27,18 +27,15 @@ pub struct Item {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
-    Proj(Label, usize),
-    Unwrap(Box<Expr>),
     Value(Value),
-    Lambda(Vec<Label>, Box<Expr>),
+    Let(Label, Box<Expr>, Box<Expr>),
     Call(Label, Vec<Value>),
+    Lambda(Vec<Label>, Box<Expr>),
     Tuple(Vec<Value>),
     Vector(Vec<Value>),
-    Let(Label, Box<Expr>, Box<Expr>),
+    Proj(Label, usize),
     Case(Label, DecisionTree),
     If(Label, Box<Expr>, Box<Expr>),
-    Dup(Box<Expr>),
-    Drop(Box<Expr>),
 }
 
 #[derive(Clone, Copy, Debug)]
