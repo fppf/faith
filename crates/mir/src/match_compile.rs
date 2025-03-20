@@ -1,6 +1,6 @@
 use base::hash::Map;
 use span::Ident;
-use syntax::ast;
+use syntax::ast::{self, ExprKind};
 
 use crate::{lower::LoweringContext, mir::Label};
 
@@ -242,5 +242,58 @@ impl<'ast> LoweringContext<'ast, '_> {
         for row in &matrix.clauses {}
 
         matrix
+    }
+
+    fn preprocess_case(
+        &mut self,
+        scrutinee: &'ast ast::Expr<'ast>,
+        arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
+    ) -> (
+        Label,
+        &'ast ast::Expr<'ast>,
+        &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
+    ) {
+        // Hoist the scrutinee in order to eliminate variable-only patterns in case arms.
+        // For example,
+        //
+        //   case f x {
+        //         y => z
+        //   }
+        //
+        // will become
+        //
+        //   let tmp = f x in
+        //   case tmp {
+        //         _ => let y = tmp in z
+        //   }
+        //
+        // There is no need to hoist paths, since we can just replace them directly with labels.
+
+        let (scrutinee, label) = if let ExprKind::Path(path) = scrutinee.kind {
+            (scrutinee, self.get_label(path))
+        } else {
+            self.insert_temp()
+        };
+
+        (label, scrutinee, arms)
+        // let mut new_arms = Vec::with_capacity(arms.len());
+        // for (pat, body) in arms {
+        //     new_arms.push(if let PatKind::Var(..) = pat.kind {
+        //         let body = self.syntax_arena.expr(
+        //             ExprKind::Let(
+        //                 &*self
+        //                     .syntax_arena
+        //                     .arena
+        //                     .alloc_from_iter([(*pat, hoisted_scrutinee)]),
+        //                 body,
+        //             ),
+        //             body.span,
+        //         );
+        //         (self.syntax_arena.pat(PatKind::Wild, pat.span), body)
+        //     } else {
+        //         (*pat, *body)
+        //     });
+        // }
+        // (label, id, self.syntax_arena.arena.alloc_from_iter(new_arms))
     }
 }

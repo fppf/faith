@@ -95,17 +95,17 @@ impl MirPrinter {
                 self.space();
                 self.word(s.as_str().to_string());
             }
-            Expr::Tuple(es) => {
+            Expr::Tuple(vs) => {
                 self.popen();
-                self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
-                    pp.print_expr(e)
+                self.strsep(",", false, Breaks::Inconsistent, vs, |pp, v| {
+                    pp.print_value(v)
                 });
                 self.pclose();
             }
-            Expr::Vector(es) => {
+            Expr::Vector(vs) => {
                 self.word("[");
-                self.strsep(",", false, Breaks::Inconsistent, es, |pp, e| {
-                    pp.print_expr(e)
+                self.strsep(",", false, Breaks::Inconsistent, vs, |pp, v| {
+                    pp.print_value(v)
                 });
                 self.word("]");
             }
@@ -155,7 +155,17 @@ impl MirPrinter {
                 self.end();
                 self.end();
             }
-            _ => self.word("..."),
+            Expr::If(l, e1, e2) => {
+                self.word("if ");
+                self.print_label(*l);
+                self.word(" then ");
+                self.print_expr(e1);
+                self.word(" else ");
+                self.print_expr(e2);
+            }
+            Expr::Unwrap(..) => todo!(),
+            Expr::Dup(..) => todo!(),
+            Expr::Drop(..) => todo!(),
         }
         self.end();
     }
