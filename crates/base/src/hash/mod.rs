@@ -10,7 +10,6 @@
 //! Fast, non-cryptographic hash used by rustc and Firefox.
 use core::{
     hash::{BuildHasherDefault, Hasher},
-    mem::size_of,
     ops::BitXor,
 };
 use std::collections::{HashMap, HashSet};
@@ -27,9 +26,7 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>
 /// Type alias for an index hashset using the `fx` hash algorithm.
 pub type IndexSet<V> = indexmap::IndexSet<V, BuildHasherDefault<FxHasher>>;
 
-pub type IndexEntry<'a, K, V> = indexmap::map::Entry<'a, K, V>;
-
-/// A speedy hash algorithm for use within rustc. The hashmap in liballoc
+/// A speedy hash algorithm previously used within rustc. The hashmap in liballoc
 /// by default uses SipHash which isn't quite as speedy as we want. In the
 /// compiler we're not really worried about DOS attempts, so we use a fast
 /// non-cryptographic hash.
@@ -71,15 +68,15 @@ impl Hasher for FxHasher {
             hash.add_to_hash(read_usize(bytes) as usize);
             bytes = &bytes[size_of::<usize>()..];
         }
-        if (size_of::<usize>() > 4) && (bytes.len() >= 4) {
+        if size_of::<usize>() > 4 && bytes.len() >= 4 {
             hash.add_to_hash(u32::from_ne_bytes(bytes[..4].try_into().unwrap()) as usize);
             bytes = &bytes[4..];
         }
-        if (size_of::<usize>() > 2) && bytes.len() >= 2 {
+        if size_of::<usize>() > 2 && bytes.len() >= 2 {
             hash.add_to_hash(u16::from_ne_bytes(bytes[..2].try_into().unwrap()) as usize);
             bytes = &bytes[2..];
         }
-        if (size_of::<usize>() > 1) && !bytes.is_empty() {
+        if size_of::<usize>() > 1 && !bytes.is_empty() {
             hash.add_to_hash(bytes[0] as usize);
         }
         self.hash = hash.hash;
