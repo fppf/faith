@@ -12,6 +12,7 @@
 #![feature(dropck_eyepatch)]
 #![feature(array_windows)]
 #![feature(never_type)]
+#![feature(maybe_uninit_slice)]
 pub mod arena;
 pub mod bitset;
 pub mod hash;

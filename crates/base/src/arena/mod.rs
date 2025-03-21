@@ -23,14 +23,6 @@ use smallvec::SmallVec;
 mod intern;
 pub use intern::Interned;
 
-// nightly feature maybe_uninit_slice
-#[inline(always)]
-const unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
-    // SAFETY: similar to safety notes for `slice_get_ref`, but we have a
-    // mutable reference which is also guaranteed to be valid for writes.
-    unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
-}
-
 /// This calls the passed function while ensuring it won't be inlined into the caller.
 #[inline(never)]
 #[cold]
@@ -74,7 +66,7 @@ impl<T> ArenaChunk<T> {
             // been initialized.
             unsafe {
                 let slice = self.storage.as_mut();
-                ptr::drop_in_place(slice_assume_init_mut(&mut slice[..len]));
+                slice[..len].assume_init_drop();
             }
         }
     }
@@ -89,7 +81,7 @@ impl<T> ArenaChunk<T> {
     #[inline]
     fn end(&mut self) -> *mut T {
         unsafe {
-            if mem::size_of::<T>() == 0 {
+            if size_of::<T>() == 0 {
                 // A pointer as large as possible for zero-sized elements.
                 ptr::without_provenance_mut(!0)
             } else {
@@ -147,7 +139,7 @@ impl<T> TypedArena<T> {
         }
 
         unsafe {
-            if mem::size_of::<T>() == 0 {
+            if size_of::<T>() == 0 {
                 self.ptr.set(self.ptr.get().wrapping_byte_add(1));
                 let ptr = ptr::NonNull::<T>::dangling().as_ptr();
                 // Don't drop the object. This `write` is equivalent to `forget`.
@@ -169,13 +161,13 @@ impl<T> TypedArena<T> {
         // FIXME: this should *likely* use `offset_from`, but more
         // investigation is needed (including running tests in miri).
         let available_bytes = self.end.get().addr() - self.ptr.get().addr();
-        let additional_bytes = additional.checked_mul(mem::size_of::<T>()).unwrap();
+        let additional_bytes = additional.checked_mul(size_of::<T>()).unwrap();
         available_bytes >= additional_bytes
     }
 
     #[inline]
     fn alloc_raw_slice(&self, len: usize) -> *mut T {
-        assert!(mem::size_of::<T>() != 0);
+        assert!(size_of::<T>() != 0);
         assert!(len != 0);
 
         // Ensure the current chunk can fit `len` objects.
@@ -209,7 +201,7 @@ impl<T> TypedArena<T> {
         // So we collect all the elements beforehand, which takes care of reentrancy and panic
         // safety. This function is much less hot than `DroplessArena::alloc_from_iter`, so it
         // doesn't need to be hyper-optimized.
-        assert!(mem::size_of::<T>() != 0);
+        assert!(size_of::<T>() != 0);
 
         let mut vec: SmallVec<_, 8> = iter.into_iter().collect();
         if vec.is_empty() {
@@ -232,7 +224,7 @@ impl<T> TypedArena<T> {
         unsafe {
             // We need the element size to convert chunk sizes (ranging from
             // PAGE to HUGE_PAGE bytes) to element counts.
-            let elem_size = cmp::max(1, mem::size_of::<T>());
+            let elem_size = cmp::max(1, size_of::<T>());
             let mut chunks = self.chunks.borrow_mut();
             let mut new_cap;
             if let Some(last_chunk) = chunks.last_mut() {
@@ -242,7 +234,7 @@ impl<T> TypedArena<T> {
                     // FIXME: this should *likely* use `offset_from`, but more
                     // investigation is needed (including running tests in miri).
                     let used_bytes = self.ptr.get().addr() - last_chunk.start().addr();
-                    last_chunk.entries = used_bytes / mem::size_of::<T>();
+                    last_chunk.entries = used_bytes / size_of::<T>();
                 }
 
                 // If the previous chunk's len is less than HUGE_PAGE
@@ -272,7 +264,7 @@ impl<T> TypedArena<T> {
         let end = self.ptr.get().addr();
         // We then calculate the number of elements to be dropped in the last chunk,
         // which is the filled area's length.
-        let diff = if mem::size_of::<T>() == 0 {
+        let diff = if size_of::<T>() == 0 {
             // `T` is ZST. It can't have a drop flag, so the value here doesn't matter. We get
             // the number of zero-sized values in the last and only chunk, just out of caution.
             // Recall that `end` was incremented for each allocated value.
@@ -280,7 +272,7 @@ impl<T> TypedArena<T> {
         } else {
             // FIXME: this should *likely* use `offset_from`, but more
             // investigation is needed (including running tests in miri).
-            (end - start) / mem::size_of::<T>()
+            (end - start) / size_of::<T>()
         };
         // Pass that to the `destroy` method.
         unsafe {
@@ -325,7 +317,7 @@ fn align_up(val: usize, align: usize) -> usize {
 
 // Pointer alignment is common in compiler types, so keep `DroplessArena` aligned to them
 // to optimize away alignment code.
-const DROPLESS_ALIGNMENT: usize = mem::align_of::<usize>();
+const DROPLESS_ALIGNMENT: usize = align_of::<usize>();
 
 /// An arena that can hold objects of multiple different types that impl `Copy`
 /// and/or satisfy `!mem::needs_drop`.
@@ -442,7 +434,7 @@ impl DroplessArena {
     #[inline]
     pub fn alloc<T>(&self, object: T) -> &mut T {
         assert!(!mem::needs_drop::<T>());
-        assert!(mem::size_of::<T>() != 0);
+        assert!(size_of::<T>() != 0);
 
         let mem = self.alloc_raw(Layout::new::<T>()) as *mut T;
         unsafe {
@@ -465,7 +457,7 @@ impl DroplessArena {
         T: Copy,
     {
         assert!(!mem::needs_drop::<T>());
-        assert!(mem::size_of::<T>() != 0);
+        assert!(size_of::<T>() != 0);
         assert!(!slice.is_empty());
 
         let mem = self.alloc_raw(Layout::for_value::<[T]>(slice)) as *mut T;
@@ -539,7 +531,7 @@ impl DroplessArena {
         // Warning: this function is reentrant: `iter` could hold a reference to `&self` and
         // allocate additional elements while we're iterating.
         let iter = iter.into_iter();
-        assert!(mem::size_of::<T>() != 0);
+        assert!(size_of::<T>() != 0);
         assert!(!mem::needs_drop::<T>());
 
         match iter.size_hint() {
