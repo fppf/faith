@@ -134,8 +134,8 @@ pub enum Doc<'a> {
     Group(&'a Doc<'a>),
 }
 
-pub trait ToDoc<'a> {
-    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a>;
+pub trait IntoDoc<'a> {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a>;
 }
 
 #[derive(Default)]
@@ -171,18 +171,19 @@ impl<'a> DocArena<'a> {
     pub fn intersperse<I, S>(&'a self, docs: I, sep: S) -> DocBuilder<'a>
     where
         I: IntoIterator,
-        I::Item: ToDoc<'a>,
-        S: ToDoc<'a> + Clone,
+        I::Item: IntoDoc<'a>,
+        S: IntoDoc<'a> + Clone,
     {
         let mut docs = docs.into_iter();
-        let mut result = self.empty();
         if let Some(first) = docs.next() {
-            result = result.append(first);
+            let mut result = first.into_doc(self);
             for doc in docs {
                 result = result.append(sep.clone()).append(doc);
             }
+            result
+        } else {
+            self.empty()
         }
-        result
     }
 }
 
@@ -197,20 +198,20 @@ impl<'a> std::ops::Deref for DocBuilder<'a> {
     }
 }
 
-impl<'a> ToDoc<'a> for DocBuilder<'a> {
-    fn to_doc(self, _: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for DocBuilder<'a> {
+    fn into_doc(self, _: &'a DocArena<'a>) -> DocBuilder<'a> {
         self
     }
 }
 
-impl<'a> ToDoc<'a> for &'a str {
-    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for &'a str {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena.text(self)
     }
 }
 
-impl<'a> ToDoc<'a> for String {
-    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for String {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena.text(self)
     }
 }
@@ -220,9 +221,9 @@ impl<'a> DocBuilder<'a> {
         self.0.alloc(self.1)
     }
 
-    pub fn append<T: ToDoc<'a>>(self, other: T) -> DocBuilder<'a> {
+    pub fn append<D: IntoDoc<'a>>(self, other: D) -> DocBuilder<'a> {
         let alloc = self.0;
-        DocBuilder(alloc, Doc::Append(self.doc(), other.to_doc(alloc).doc()))
+        DocBuilder(alloc, Doc::Append(self.doc(), other.into_doc(alloc).doc()))
     }
 
     pub fn nest(self, indent: isize) -> DocBuilder<'a> {
@@ -233,8 +234,13 @@ impl<'a> DocBuilder<'a> {
         DocBuilder(self.0, Doc::Group(self.doc()))
     }
 
-    pub fn enclose<L: ToDoc<'a>, R: ToDoc<'a>>(self, left: L, right: R) -> DocBuilder<'a> {
-        left.to_doc(self.0).append(self).append(right)
+    pub fn enclose<L: IntoDoc<'a>, R: IntoDoc<'a>>(self, left: L, right: R) -> DocBuilder<'a> {
+        left.into_doc(self.0).append(self).append(right)
+    }
+
+    pub fn space<D: IntoDoc<'a>>(self, other: D) -> DocBuilder<'a> {
+        let space = self.0.space();
+        self.append(space).append(other)
     }
 
     pub fn pretty<W: io::Write>(self, writer: &mut W, width: usize) -> io::Result<()> {

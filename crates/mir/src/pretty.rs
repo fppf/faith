@@ -8,7 +8,7 @@ use crate::{
     mir::{Expr, Label, Module},
 };
 
-use base::pp::{Doc, DocArena, DocBuilder, INDENT, PRETTY_WIDTH, Superscript, ToDoc};
+use base::pp::{Doc, DocArena, DocBuilder, INDENT, IntoDoc, PRETTY_WIDTH, Superscript};
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -27,14 +27,14 @@ impl fmt::Display for Lit {
     }
 }
 
-impl<'a> ToDoc<'a> for Label {
-    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for Label {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena.text(self.to_string())
     }
 }
 
-impl<'a> ToDoc<'a> for Lit {
-    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for Lit {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena.text(self.to_string())
     }
 }
@@ -42,8 +42,8 @@ impl<'a> ToDoc<'a> for Lit {
 impl Value {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
-            Value::Label(l) => l.to_doc(arena),
-            Value::Lit(l) => l.to_doc(arena),
+            Value::Label(l) => l.into_doc(arena),
+            Value::Lit(l) => l.into_doc(arena),
             Value::External(s) => arena
                 .text("external")
                 .append(
@@ -58,29 +58,54 @@ impl Value {
 
 impl Expr {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        // FIXME
         match self {
             Expr::Value(v) => v.to_doc(arena),
             Expr::Tuple(vs) => arena
                 .intersperse(vs.iter().map(|v| v.to_doc(arena)), arena.brk(", "))
                 .enclose("(", ")")
                 .group(),
-            Expr::Vector(vs) => {
-                todo!()
+            Expr::Vector(vs) => arena
+                .intersperse(vs.iter().map(|v| v.to_doc(arena)), arena.brk(", "))
+                .enclose("[", "]")
+                .group(),
+            Expr::Let(l, e1, e2) => {
+                let bind_doc = arena
+                    .text("let")
+                    .space(*l)
+                    .space("=")
+                    .space(e1.to_doc(arena));
+                let body_doc = e2.to_doc(arena);
+                bind_doc.space("in").group().space(body_doc)
             }
-            Expr::Let(l, e1, e2) => arena
-                .text("let ")
-                .append(*l)
-                .append(" = ")
-                .append(e1.to_doc(arena))
-                .append(" in")
-                .append(arena.space())
-                .append(e2.to_doc(arena).nest(INDENT)),
-            Expr::Proj(l, i) => l.to_doc(arena).append(".").append(i.to_string()),
+            Expr::Proj(l, i) => l.into_doc(arena).append(".").append(i.to_string()).group(),
             Expr::Lambda(args, body) => body.to_doc(arena),
-            Expr::Call(f, args) => f.to_doc(arena),
-            Expr::Case(l, _tree) => l.to_doc(arena),
-            Expr::If(l, e1, e2) => l.to_doc(arena),
+            Expr::Call(f, args) => f
+                .into_doc(arena)
+                .space(arena.intersperse(args.iter().map(|arg| arg.to_doc(arena)), arena.space()))
+                .enclose("(", ")")
+                .group(),
+            Expr::Case(l, _tree) => {
+                let arms = arena.text("TODO");
+                arena
+                    .text("case")
+                    .space(*l)
+                    .space(arms.enclose("{", "}"))
+                    .group()
+            }
+            Expr::If(l, e1, e2) => {
+                let cond_doc = arena.text("if").space(*l).nest(INDENT).group();
+                let then_doc = arena
+                    .text("then")
+                    .space(e1.to_doc(arena))
+                    .nest(INDENT)
+                    .group();
+                let else_doc = arena
+                    .text("else")
+                    .space(e2.to_doc(arena))
+                    .nest(INDENT)
+                    .group();
+                cond_doc.space(then_doc).space(else_doc).group()
+            }
         }
     }
 }
