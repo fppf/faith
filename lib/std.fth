@@ -19,8 +19,9 @@ mod bool = {
    }
 }
 
- mod vec = import "vec.fth"
- mod list = import "list.fth"
- mod option = import "option.fth"
- mod either = import "either.fth"
+mod vec = import "vec.fth"
+mod list = import "list.fth"
+mod option = import "option.fth"
+mod either = import "either.fth"
 
+val id x = x

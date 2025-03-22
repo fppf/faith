@@ -13,6 +13,7 @@
 #![feature(array_windows)]
 #![feature(never_type)]
 #![feature(maybe_uninit_slice)]
+#![feature(let_chains)]
 pub mod arena;
 pub mod bitset;
 pub mod hash;

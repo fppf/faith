@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use base::pp::{DocArena, PRETTY_WIDTH};
 use span::diag;
 
 #[derive(PartialEq)]
@@ -55,7 +56,8 @@ fn run_passes(src: Source, stop_after: Pass) -> Result<(), diag::Diagnostic> {
     }
 
     let mir = mir::lower(&syntax_arena, program, res, env);
-    println!("{mir}");
+    let doc_arena = DocArena::default();
+    println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
 
     Ok(())
 }

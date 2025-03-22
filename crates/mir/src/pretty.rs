@@ -4,27 +4,15 @@ use std::{
 };
 
 use crate::{
-    Lit, Value,
+    Lit, MAIN_LABEL, Value,
     mir::{Expr, Label, Module},
 };
 
-use base::pp::*;
+use base::pp::{Doc, DocArena, DocBuilder, INDENT, PRETTY_WIDTH, Superscript, ToDoc};
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "l{}", Superscript(self.as_u32()))
-    }
-}
-
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        MirPrinter::to_string(|p| p.print_expr(self)).fmt(f)
-    }
-}
-
-impl fmt::Display for Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        MirPrinter::to_string(|p| p.print_module(self)).fmt(f)
     }
 }
 
@@ -39,145 +27,76 @@ impl fmt::Display for Lit {
     }
 }
 
-struct MirPrinter {
-    pp: Printer,
-}
-
-impl Deref for MirPrinter {
-    type Target = Printer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pp
+impl<'a> ToDoc<'a> for Label {
+    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        arena.text(self.to_string())
     }
 }
 
-impl DerefMut for MirPrinter {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.pp
+impl<'a> ToDoc<'a> for Lit {
+    fn to_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        arena.text(self.to_string())
     }
 }
 
-impl PrintState for MirPrinter {}
-
-impl MirPrinter {
-    fn new() -> Self {
-        MirPrinter {
-            pp: Printer::default(),
+impl Value {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            Value::Label(l) => l.to_doc(arena),
+            Value::Lit(l) => l.to_doc(arena),
+            Value::External(s) => arena
+                .text("external")
+                .append(
+                    arena
+                        .text(s.as_str().to_string())
+                        .enclose(arena.text("("), arena.text(")")),
+                )
+                .group(),
         }
     }
+}
 
-    fn to_string<F>(f: F) -> String
-    where
-        F: FnOnce(&mut Self),
-    {
-        let mut printer = Self::new();
-        f(&mut printer);
-        printer.pp.eof()
-    }
-
-    fn print_label(&mut self, label: Label) {
-        self.word(label.to_string());
-    }
-
-    fn print_value(&mut self, value: &Value) {
-        match value {
-            Value::Label(l) => self.print_label(*l),
-            Value::Lit(l) => self.word(l.to_string()),
-            Value::External(s) => {
-                self.word("external");
-                self.popen();
-                self.word(s.as_str().to_string());
-                self.pclose();
-            }
-        }
-    }
-
-    fn print_expr(&mut self, expr: &Expr) {
-        self.ibox(INDENT);
-        match expr {
-            Expr::Value(v) => self.print_value(v),
-            Expr::Tuple(vs) => {
-                self.popen();
-                self.strsep(",", false, Breaks::Inconsistent, vs, |pp, v| {
-                    pp.print_value(v)
-                });
-                self.pclose();
-            }
+impl Expr {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        // FIXME
+        match self {
+            Expr::Value(v) => v.to_doc(arena),
+            Expr::Tuple(vs) => arena
+                .intersperse(vs.iter().map(|v| v.to_doc(arena)), arena.brk(", "))
+                .enclose("(", ")")
+                .group(),
             Expr::Vector(vs) => {
-                self.word("[");
-                self.strsep(",", false, Breaks::Inconsistent, vs, |pp, v| {
-                    pp.print_value(v)
-                });
-                self.word("]");
+                todo!()
             }
-            Expr::Let(l, e1, e2) => {
-                self.word_space("let");
-                self.print_label(*l);
-                self.space();
-                self.word_space("=");
-                self.print_expr(e1);
-                self.space();
-                self.word("in");
-                self.hardbreak();
-                self.break_offset_if_not_bol(1, -INDENT);
-                self.print_expr(e2);
-            }
-            Expr::Proj(l, i) => {
-                self.print_label(*l);
-                self.word(".");
-                self.word(i.to_string());
-            }
-            Expr::Lambda(args, body) => {
-                self.word("\\");
-                self.strsep("", false, Breaks::Inconsistent, args, |pp, arg| {
-                    pp.print_label(*arg)
-                });
-                self.space();
-                self.word_space("->");
-                self.print_expr(body);
-            }
-            Expr::Call(f, args) => {
-                self.word("(");
-                self.print_label(*f);
-                self.space();
-                self.strsep("", false, Breaks::Inconsistent, args, |pp, e| {
-                    pp.print_value(e)
-                });
-                self.word(")");
-            }
-            Expr::Case(l, _tree) => {
-                self.cbox(0);
-                self.ibox(0);
-                self.word_space("case");
-                self.print_label(*l);
-                self.space();
-                self.word("{");
-                self.word("}");
-                self.end();
-                self.end();
-            }
-            Expr::If(l, e1, e2) => {
-                self.word("if ");
-                self.print_label(*l);
-                self.word(" then ");
-                self.print_expr(e1);
-                self.word(" else ");
-                self.print_expr(e2);
-            }
+            Expr::Let(l, e1, e2) => arena
+                .text("let ")
+                .append(*l)
+                .append(" = ")
+                .append(e1.to_doc(arena))
+                .append(" in")
+                .append(arena.space())
+                .append(e2.to_doc(arena).nest(INDENT)),
+            Expr::Proj(l, i) => l.to_doc(arena).append(".").append(i.to_string()),
+            Expr::Lambda(args, body) => body.to_doc(arena),
+            Expr::Call(f, args) => f.to_doc(arena),
+            Expr::Case(l, _tree) => l.to_doc(arena),
+            Expr::If(l, e1, e2) => l.to_doc(arena),
         }
-        self.end();
     }
+}
 
-    fn print_module(&mut self, module: &Module) {
-        for item in &module.items {
-            self.word_space("val");
-            self.print_label(item.label);
-            self.space();
-            self.word_space("=");
-            self.cbox(INDENT);
-            self.print_expr(&item.body);
-            self.end();
-            self.hardbreak();
+impl Module {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let mut doc = arena.empty();
+        for item in &self.items {
+            doc = doc
+                .append("val ")
+                .append(item.label)
+                .append(" =")
+                .append(arena.space())
+                .append(item.body.to_doc(arena).nest(INDENT))
+                .append(arena.line());
         }
+        doc
     }
 }
