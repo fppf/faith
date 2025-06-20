@@ -6,4 +6,4 @@ authors = ["rustc authors"]
 
 [dependencies]
 indexmap = "2.7"
-smallvec = { version = "2.0.0-alpha.10", features = ["may_dangle"] }
+smallvec = { version = "2.0.0-alpha.11", features = ["may_dangle"] }
