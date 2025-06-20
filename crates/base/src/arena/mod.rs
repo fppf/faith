@@ -652,14 +652,14 @@ macro_rules! declare_arena {
 
         impl<$l> Arena<$l> {
             #[inline]
-            #[allow(clippy::mut_from_ref)]
+            #[allow(clippy::mut_from_ref, mismatched_lifetime_syntaxes)]
             pub fn alloc<T: ArenaAllocatable<$l, C>, C>(&$l self, value: T) -> &mut T {
                 value.allocate_on(self)
             }
 
             // Any type that impls `Copy` can have slices be arena-allocated in the `DroplessArena`.
             #[inline]
-            #[allow(clippy::mut_from_ref)]
+            #[allow(clippy::mut_from_ref, mismatched_lifetime_syntaxes)]
             pub fn alloc_slice<T: std::marker::Copy>(&self, value: &[T]) -> &mut [T] {
                 if value.is_empty() {
                     return &mut [];
@@ -675,7 +675,7 @@ macro_rules! declare_arena {
                 self.dropless.alloc_str(string)
             }
 
-            #[allow(clippy::mut_from_ref)]
+            #[allow(clippy::mut_from_ref, mismatched_lifetime_syntaxes)]
             pub fn alloc_from_iter<T: ArenaAllocatable<$l, C>, C>(
                 &$l self,
                 iter: impl std::iter::IntoIterator<Item = T>,
