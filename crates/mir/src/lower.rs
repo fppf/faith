@@ -102,7 +102,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
     }
 
     fn lower(mut self) -> mir::Module {
-        for (&res_id, _constructor) in &self.resolution.constructors {
+        for &res_id in self.resolution.constructors.keys() {
             let label = self.next_label();
             self.res_to_label.insert(res_id, label);
             self.label_to_res.insert(label, res_id);
@@ -205,7 +205,9 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         match lit {
             ast::Lit::Unit => mir::Lit::Unit,
             ast::Lit::Bool(b) => mir::Lit::Bool(b),
-            ast::Lit::Int32(s) => {
+            ast::Lit::Int32(s) =>
+            {
+                #[allow(clippy::from_str_radix_10)]
                 mir::Lit::Int32(i32::from_str_radix(&s.as_str().replace("_", ""), 10).unwrap())
             }
             ast::Lit::Str(s) => mir::Lit::Str(s),

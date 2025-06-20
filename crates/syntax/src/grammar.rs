@@ -117,10 +117,10 @@ fn comp_unit_eof<'ast>(
     eof: bool,
 ) -> ParseResult<&'ast CompUnit<'ast>> {
     let mut items = Vec::new();
-    if !p.inside_std {
-        if let Some(std) = std_import_item(p)? {
-            items.push(std);
-        }
+    if !p.inside_std
+        && let Some(std) = std_import_item(p)?
+    {
+        items.push(std);
     }
     p.eat(NEWLINE);
     while !p.at(EOF) && !p.at(KW_MAIN) {

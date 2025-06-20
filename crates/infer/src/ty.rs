@@ -337,7 +337,7 @@ impl fmt::Display for Ty<'_> {
             TyKind::App(r, ts) => write!(f, "({} {})", r.res_id(), ts.iter().format(" ")),
             TyKind::Arrow(t1, t2) => write!(f, "({t1} -> {t2})"),
             TyKind::Tuple(ts) => write!(f, "({})", ts.iter().format(", ")),
-            TyKind::Vector(t) => write!(f, "[{}]", t),
+            TyKind::Vector(t) => write!(f, "[{t}]"),
         }
     }
 }

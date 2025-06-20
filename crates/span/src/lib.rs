@@ -227,10 +227,10 @@ impl SourceMap {
     where
         S: Into<String>,
     {
-        if let Some(path) = path {
-            if let Some(source_id) = self.lookup_existing_source_id(path) {
-                return source_id;
-            }
+        if let Some(path) = path
+            && let Some(source_id) = self.lookup_existing_source_id(path)
+        {
+            return source_id;
         }
 
         let src = src.into();
