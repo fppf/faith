@@ -1,5 +1,4 @@
 #![feature(never_type)]
-#![feature(let_chains)]
 
 use base::hash::Map;
 use span::{Ident, Sp, Span, Sym, diag::Diagnostic};
