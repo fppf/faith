@@ -2,12 +2,12 @@ use base::hash::Map;
 use span::Ident;
 use syntax::ast::{self, ExprKind};
 
-use crate::{lower::LoweringContext, mir::Label};
+use crate::{Var, lower::LoweringContext};
 
 // The pattern match compilation algorithm is due to Jules Jacobs
-// https://julesjacobs.com/notes/patternmatching/patternmatching.pdf
+// <https://julesjacobs.com/notes/patternmatching/patternmatching.pdf>
 // with help from Yorick Peterse's implementation
-// https://github.com/yorickpeterse/pattern-matching-in-rust
+// <https://github.com/yorickpeterse/pattern-matching-in-rust>
 //
 // The algorithm
 // -------------
@@ -38,7 +38,7 @@ use crate::{lower::LoweringContext, mir::Label};
 //
 // A case expression gives us a list of 1-test clauses (since the user
 // can only write cases against a single scrutinee). The internal
-// pattern matchin will use many-test clauses depending on the arity
+// pattern matching will use many-test clauses depending on the arity
 // of constructors.
 //
 // The goal is an algorithm that takes such an input list of clauses
@@ -84,15 +84,15 @@ use crate::{lower::LoweringContext, mir::Label};
 //
 // Other references
 // ----------------
-// Compiling Pattern Matching to Good Decision Trees, Luc Maranget
-// https://compiler.club/compiling-pattern-matching/
-// https://github.com/SomewhatML/match-compile/
+//   - Compiling Pattern Matching to Good Decision Trees, Luc Maranget
+//   - https://compiler.club/compiling-pattern-matching/
+//   - https://github.com/SomewhatML/match-compile/
 
 #[derive(Clone, Debug)]
 pub enum DecisionTree {
     Fail,
     Leaf(usize),
-    Switch(Label, Vec<Case>, Option<Box<DecisionTree>>),
+    Switch(Var, Vec<Case>, Option<Box<DecisionTree>>),
 }
 
 #[derive(Clone, Debug)]
@@ -194,13 +194,8 @@ impl<'ast> LoweringContext<'ast, '_> {
         &mut self,
         scrutinee: &'ast ast::Expr<'ast>,
         arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
-    ) -> (Label, DecisionTree) {
-        (Label::ZERO, DecisionTree::Fail)
-
-        // let (label, scrutinee_id, arms) = self.preprocess_case(scrutinee, arms);
-        // let mut matrix = Matrix::new_from_case(scrutinee_id, arms);
-        // let tree = self.compile(&mut matrix);
-        // (label, tree)
+    ) -> (Var, DecisionTree) {
+        todo!()
     }
 
     fn compile(&mut self, matrix: &mut Matrix<'ast>) -> DecisionTree {
@@ -223,7 +218,7 @@ impl<'ast> LoweringContext<'ast, '_> {
 
         let label = todo!();
 
-        let branch_var_typ = self.get_label_type(label);
+        //let branch_var_typ = self.get_label_type(label);
         /*self
         .infer_data
         .hir_id_to_type
@@ -234,66 +229,5 @@ impl<'ast> LoweringContext<'ast, '_> {
         let mut cases = Vec::new();
 
         DecisionTree::Switch(label, cases, None)
-    }
-
-    fn specialize(&self, id: Ident, matrix: &Matrix<'ast>) -> Matrix<'ast> {
-        let mut matrix = Matrix::default();
-
-        for row in &matrix.clauses {}
-
-        matrix
-    }
-
-    fn preprocess_case(
-        &mut self,
-        scrutinee: &'ast ast::Expr<'ast>,
-        arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
-    ) -> (
-        Label,
-        &'ast ast::Expr<'ast>,
-        &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
-    ) {
-        // Hoist the scrutinee in order to eliminate variable-only patterns in case arms.
-        // For example,
-        //
-        //   case f x {
-        //         y => z
-        //   }
-        //
-        // will become
-        //
-        //   let tmp = f x in
-        //   case tmp {
-        //         _ => let y = tmp in z
-        //   }
-        //
-        // There is no need to hoist paths, since we can just replace them directly with labels.
-
-        let (scrutinee, label) = if let ExprKind::Path(path) = scrutinee.kind {
-            (scrutinee, self.get_label(path))
-        } else {
-            self.insert_temp()
-        };
-
-        (label, scrutinee, arms)
-        // let mut new_arms = Vec::with_capacity(arms.len());
-        // for (pat, body) in arms {
-        //     new_arms.push(if let PatKind::Var(..) = pat.kind {
-        //         let body = self.syntax_arena.expr(
-        //             ExprKind::Let(
-        //                 &*self
-        //                     .syntax_arena
-        //                     .arena
-        //                     .alloc_from_iter([(*pat, hoisted_scrutinee)]),
-        //                 body,
-        //             ),
-        //             body.span,
-        //         );
-        //         (self.syntax_arena.pat(PatKind::Wild, pat.span), body)
-        //     } else {
-        //         (*pat, *body)
-        //     });
-        // }
-        // (label, id, self.syntax_arena.arena.alloc_from_iter(new_arms))
     }
 }

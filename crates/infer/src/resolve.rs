@@ -15,8 +15,8 @@ use span::{
     diag::{Diagnostic, Label, Level},
 };
 use syntax::ast::{
-    AstId, AstVisitor, CompUnit, Expr, ExprKind, Item, Lit, ModExpr, Pat, PatKind, Path, Program,
-    Type, TypeDeclKind,
+    self, AstId, AstVisitor, CompUnit, Expr, ExprKind, Item, Lit, ModExpr, Pat, PatKind, Path,
+    Program, Type, TypeDeclKind,
 };
 
 use crate::ty::{Ty, TyCtxt, TyKind, TypeVar};
@@ -279,7 +279,7 @@ pub struct Value<'t> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Constructor<'t> {
-    pub id: Ident,
+    pub id: ast::Id,
     pub ty: Ty<'t>,
     pub arity: usize,
     pub decl: Res,
@@ -518,7 +518,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                                 self.res.constructors.insert(
                                     cons_res_id,
                                     Constructor {
-                                        id: id.ident,
+                                        id,
                                         ty: Ty::n_arrow(self.ctxt, new_args.iter().copied(), ty),
                                         arity: new_args.len(),
                                         decl: res,

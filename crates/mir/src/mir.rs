@@ -1,51 +1,122 @@
+use std::rc::Rc;
+
 use base::{hash::Map, index::IndexVec};
 use span::Sym;
 
-use crate::match_compile::DecisionTree;
-
-base::newtype_index! {
-    pub struct MirId {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Var {
+    pub sym: Sym,
+    pub stamp: u32,
 }
 
-base::newtype_index! {
-    pub struct Label {}
+impl Var {
+    pub fn new(sym: Sym, stamp: u32) -> Self {
+        Self { sym, stamp }
+    }
 }
 
-pub const MAIN_LABEL: Label = Label::ZERO;
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Ty(Rc<TyKind>);
 
-#[derive(Default, Debug)]
-pub struct Module {
-    pub items: IndexVec<MirId, Item>,
-    pub label_to_mir_id: Map<Label, MirId>,
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum TyKind {
+    Var(Var),
+    // n-ary function types
+    // t1 t2 -> t3 is not the same as t1 -> t2 -> t3
+    Arrow(Vec<Ty>, Ty),
 }
 
 #[derive(Debug)]
-pub struct Item {
-    pub label: Label,
-    pub body: Expr,
+pub struct Program {
+    pub funcs: Vec<Func>,
+    pub main: Expr,
 }
 
 #[derive(Clone, Debug)]
-pub enum Expr {
-    Value(Value),
-    Let(Label, Box<Expr>, Box<Expr>),
-    Call(Label, Vec<Value>),
-    Lambda(Vec<Label>, Box<Expr>),
-    Tuple(Vec<Value>),
-    Vector(Vec<Value>),
-    Proj(Label, usize),
-    Case(Label, DecisionTree),
-    If(Label, Box<Expr>, Box<Expr>),
+pub struct Expr {
+    pub kind: ExprKind,
+    //pub ty: Ty,
 }
+
+impl Expr {
+    pub fn new(kind: ExprKind) -> Self {
+        Self { kind }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ExprKind {
+    // let lhs = rhs in body
+    Let { lhs: Var, rhs: Rhs, body: Box<Expr> },
+    // let func in body
+    LetFunc { func: Func, body: Box<Expr> },
+    // let join in body
+    LetJoin { join: Join, body: Box<Expr> },
+    // tail call
+    Tail(Call),
+    // jump(id, v1, ..., vn)
+    Jump(JoinId, Vec<Value>),
+    // return(v)
+    Return(Value),
+    // case v of { p1 => e1, ..., pn => en }
+    Case(Value, Vec<(Pat, Expr)>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct JoinId(pub u32);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Value {
+    Var(Var),
     Lit(Lit),
-    Label(Label),
     External(Sym),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
+pub enum Rhs {
+    Value(Value),
+    Proj(Var, usize),
+    Cons(Var, Vec<Value>),
+    Tuple(Vec<Value>),
+    Vector(Vec<Value>),
+    Call(Call),
+}
+
+#[derive(Clone, Debug)]
+pub struct Call {
+    pub func: Var,
+    pub args: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Join {
+    pub id: JoinId,
+    pub args: Vec<Var>,
+    pub body: Box<Expr>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Pat {
+    Wild,
+    Lit(Lit),
+    Cons(Var, Vec<Pat>),
+}
+
+#[derive(Clone, Debug)]
+pub struct Func {
+    pub name: Var,
+    pub args: Vec<Var>,
+    pub body: Box<Expr>,
+    pub recursive: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Closure {
+    pub env: Map<Var, Value>,
+    pub func: Func,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lit {
     Unit,
     Bool(bool),

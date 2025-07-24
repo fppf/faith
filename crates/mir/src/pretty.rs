@@ -3,16 +3,20 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{
-    Lit, MAIN_LABEL, Value,
-    mir::{Expr, Label, Module},
-};
+use base::pp::{Doc, DocArena, DocBuilder, INDENT, IntoDoc, PRETTY_WIDTH, Subscript};
 
-use base::pp::{Doc, DocArena, DocBuilder, INDENT, IntoDoc, PRETTY_WIDTH, Superscript};
+use crate::{Call, Expr, ExprKind, Func, Join, JoinId, Lit, Pat, Program, Rhs, Value, Var};
 
-impl fmt::Display for Label {
+impl fmt::Display for Var {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "l{}", Superscript(self.as_u32()))
+        let s = self.sym.as_str();
+        write!(f, "{s}{}", Subscript(self.stamp))
+    }
+}
+
+impl fmt::Display for JoinId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ".j{}", self.0)
     }
 }
 
@@ -27,30 +31,32 @@ impl fmt::Display for Lit {
     }
 }
 
-impl<'a> IntoDoc<'a> for Label {
+impl<'a> IntoDoc<'a> for Var {
     fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        arena.text(self.to_string())
+        self.to_string().into_doc(arena)
+    }
+}
+
+impl<'a> IntoDoc<'a> for JoinId {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        self.to_string().into_doc(arena)
     }
 }
 
 impl<'a> IntoDoc<'a> for Lit {
     fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        arena.text(self.to_string())
+        self.to_string().into_doc(arena)
     }
 }
 
-impl Value {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl<'a> IntoDoc<'a> for Value {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
-            Value::Label(l) => l.into_doc(arena),
+            Value::Var(x) => x.into_doc(arena),
             Value::Lit(l) => l.into_doc(arena),
             Value::External(s) => arena
-                .text("external")
-                .append(
-                    arena
-                        .text(s.as_str().to_string())
-                        .enclose(arena.text("("), arena.text(")")),
-                )
+                .text("#")
+                .append(arena.text(s.as_str().to_string()).enclose("(", ")"))
                 .group(),
         }
     }
@@ -58,70 +64,135 @@ impl Value {
 
 impl Expr {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        match self {
-            Expr::Value(v) => v.to_doc(arena),
-            Expr::Tuple(vs) => arena
-                .intersperse(vs.iter().map(|v| v.to_doc(arena)), arena.brk(", "))
-                .enclose("(", ")")
-                .group(),
-            Expr::Vector(vs) => arena
-                .intersperse(vs.iter().map(|v| v.to_doc(arena)), arena.brk(", "))
-                .enclose("[", "]")
-                .group(),
-            Expr::Let(l, e1, e2) => {
-                let bind_doc = arena
-                    .text("let")
-                    .space(*l)
-                    .space("=")
-                    .space(e1.to_doc(arena));
-                let body_doc = e2.to_doc(arena);
-                bind_doc.space("in").group().space(body_doc)
-            }
-            Expr::Proj(l, i) => l.into_doc(arena).append(".").append(i.to_string()).group(),
-            Expr::Lambda(args, body) => body.to_doc(arena),
-            Expr::Call(f, args) => f
+        match &self.kind {
+            ExprKind::Let { lhs, rhs, body } => arena
+                .text("let")
+                .space(*lhs)
+                .space("=")
+                .space(rhs.to_doc(arena))
+                .space("in")
+                .append(arena.line())
+                .append(body.to_doc(arena)),
+            ExprKind::LetFunc { func, body } => arena
+                .text("let ")
+                .append(func.to_doc(arena).nest(2))
+                .append(arena.line())
+                .append("in")
+                .append(arena.line())
+                .append(body.to_doc(arena)),
+            ExprKind::LetJoin { join, body } => arena
+                .text("let ")
+                .append(join.to_doc(arena).nest(2))
+                .append(arena.line())
+                .append("in")
+                .append(arena.line())
+                .append(body.to_doc(arena)),
+            ExprKind::Tail(call) => call.to_doc(arena),
+            ExprKind::Jump(join_id, vs) => join_id
                 .into_doc(arena)
-                .space(arena.intersperse(args.iter().map(|arg| arg.to_doc(arena)), arena.space()))
-                .enclose("(", ")")
+                .space(arena.intersperse(vs.iter().copied(), arena.space()))
                 .group(),
-            Expr::Case(l, _tree) => {
-                let arms = arena.text("TODO");
+            ExprKind::Return(v) => arena.text("ret").space(*v),
+            ExprKind::Case(v, arms) => {
+                let arms = arena.line().append(arena.intersperse(
+                    arms.iter().map(|(p, e)| {
+                        p.to_doc(arena)
+                            .space("=> ")
+                            .group()
+                            .append(e.to_doc(arena))
+                            .nest(2)
+                    }),
+                    arena.text(",").append(arena.line()),
+                ));
                 arena
                     .text("case")
-                    .space(*l)
-                    .space(arms.enclose("{", "}"))
-                    .group()
-            }
-            Expr::If(l, e1, e2) => {
-                let cond_doc = arena.text("if").space(*l).nest(INDENT).group();
-                let then_doc = arena
-                    .text("then")
-                    .space(e1.to_doc(arena))
-                    .nest(INDENT)
-                    .group();
-                let else_doc = arena
-                    .text("else")
-                    .space(e2.to_doc(arena))
-                    .nest(INDENT)
-                    .group();
-                cond_doc.space(then_doc).space(else_doc).group()
+                    .space(*v)
+                    .space("{")
+                    .append(arms.nest(2))
+                    .append(",")
+                    .append(arena.line())
+                    .append("}")
             }
         }
     }
 }
 
-impl Module {
+impl Rhs {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            Rhs::Value(v) => v.into_doc(arena),
+            Rhs::Proj(x, i) => x.into_doc(arena).append(".").append(i.to_string()).group(),
+            Rhs::Cons(var, vs) => todo!(),
+            Rhs::Tuple(vs) => arena
+                .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
+                .enclose("(", ")")
+                .group(),
+            Rhs::Vector(vs) => arena
+                .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
+                .enclose("[", "]")
+                .group(),
+            Rhs::Call(call) => call.to_doc(arena),
+        }
+    }
+}
+
+impl Pat {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            Pat::Wild => arena.text("_"),
+            Pat::Lit(lit) => lit.into_doc(arena),
+            Pat::Cons(c, _ps) => c.into_doc(arena),
+        }
+    }
+}
+
+impl Func {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        arena
+            .text("fn")
+            .space(self.name)
+            .space(arena.intersperse(self.args.iter().copied(), arena.space()))
+            .space("=")
+            .group()
+            .append(arena.line())
+            .append(self.body.to_doc(arena))
+    }
+}
+
+impl Join {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        arena
+            .text("join")
+            .space(self.id)
+            .space(arena.intersperse(self.args.iter().copied(), arena.space()))
+            .space("=")
+            .group()
+            .append(arena.line())
+            .append(self.body.to_doc(arena))
+    }
+}
+
+impl Call {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        self.func
+            .into_doc(arena)
+            .space(arena.intersperse(
+                self.args.iter().map(|arg| arg.into_doc(arena)),
+                arena.space(),
+            ))
+            .group()
+    }
+}
+
+impl Program {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         let mut doc = arena.empty();
-        for item in &self.items {
+        for func in &self.funcs {
             doc = doc
-                .append("val ")
-                .append(item.label)
-                .append(" =")
-                .append(arena.space())
-                .append(item.body.to_doc(arena).nest(INDENT))
+                .append(func.to_doc(arena).nest(2))
+                .append(arena.line())
                 .append(arena.line());
         }
-        doc
+        doc.append(self.main.to_doc(arena))
     }
 }
