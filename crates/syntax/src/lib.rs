@@ -18,16 +18,18 @@ base::declare_arena!('ast, [
 pub fn parse_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     path: &std::path::Path,
+    should_parse_std: bool,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    let parser = make_parser(arena, PathOrStr::Path(path), AstId::ZERO)?;
+    let parser = make_parser(arena, PathOrStr::Path(path), should_parse_std, AstId::ZERO)?;
     grammar::program(parser).map_err(Diagnostic::from)
 }
 
 pub fn parse_str_program_in<'ast>(
     arena: &'ast Arena<'ast>,
     src: &str,
+    should_parse_std: bool,
 ) -> Result<&'ast ast::Program<'ast>, Diagnostic> {
-    let parser = make_parser(arena, PathOrStr::Str(src), AstId::ZERO)?;
+    let parser = make_parser(arena, PathOrStr::Str(src), should_parse_std, AstId::ZERO)?;
     grammar::program(parser).map_err(Diagnostic::from)
 }
 
@@ -39,6 +41,7 @@ pub(crate) enum PathOrStr<'a> {
 pub(crate) fn make_parser<'ast>(
     arena: &'ast Arena<'ast>,
     source: PathOrStr<'_>,
+    should_parse_std: bool,
     ast_id: AstId,
 ) -> Result<Parser<'ast>, Diagnostic> {
     span::with_source_map(|sm| {
@@ -53,6 +56,7 @@ pub(crate) fn make_parser<'ast>(
             arena,
             source_id,
             ast_id,
+            should_parse_std,
             Lexer::new(&sm[source_id]),
         ))
     })

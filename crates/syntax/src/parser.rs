@@ -23,6 +23,7 @@ pub(crate) struct Parser<'ast> {
     pub arena: &'ast Arena<'ast>,
     pub current_comp_unit: SourceId,
     pub inside_std: bool,
+    pub should_parse_std: bool,
     pub imports: Map<SourceId, &'ast CompUnit<'ast>>,
 }
 
@@ -46,6 +47,7 @@ impl<'ast> Parser<'ast> {
         arena: &'ast Arena<'ast>,
         current_comp_unit: SourceId,
         ast_id: AstId,
+        should_parse_std: bool,
         tokens: impl IntoIterator<Item = Token>,
     ) -> Self {
         Self {
@@ -56,6 +58,7 @@ impl<'ast> Parser<'ast> {
             arena,
             current_comp_unit,
             inside_std: false,
+            should_parse_std,
             imports: Map::default(),
         }
     }

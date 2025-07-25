@@ -72,11 +72,15 @@ fn parse_import(
         {
             source_id
         } else {
-            let mut sub_p = make_parser(p.arena, PathOrStr::Path(&file_path), p.ast_id).map_err(
-                |_e /*FIXME*/| {
-                    ParseError::new(format!("cannot parse {}", file_path.display()), span)
-                },
-            )?;
+            let mut sub_p = make_parser(
+                p.arena,
+                PathOrStr::Path(&file_path),
+                p.should_parse_std,
+                p.ast_id,
+            )
+            .map_err(|_e /*FIXME*/| {
+                ParseError::new(format!("cannot parse {}", file_path.display()), span)
+            })?;
             sub_p.inside_std = p.inside_std;
             log::info!("parsing '{}'", import_path.display());
             let comp_unit = comp_unit(sub_p.current_comp_unit, &mut sub_p)?;
@@ -117,7 +121,8 @@ fn comp_unit_eof<'ast>(
     eof: bool,
 ) -> ParseResult<&'ast CompUnit<'ast>> {
     let mut items = Vec::new();
-    if !p.inside_std
+    if p.should_parse_std
+        && !p.inside_std
         && let Some(std) = std_import_item(p)?
     {
         items.push(std);
