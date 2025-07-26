@@ -14,7 +14,6 @@
 #![feature(never_type)]
 #![feature(maybe_uninit_slice)]
 pub mod arena;
-pub mod bitset;
 pub mod hash;
 pub mod index;
 pub mod pp;
