@@ -885,8 +885,8 @@ fn verify_resolved<'ast, 't>(program: &'ast Program<'ast>, res: &'t Resolution<'
                         "{:?} resolved to {res}",
                         expr,
                     );
-                    //let cons = self.res.constructors.get(&res.res_id());
-                    //assert!(cons.is_some());
+                    let cons = self.res.constructors.get(&res.res_id());
+                    assert!(cons.is_some());
                 }
                 _ => expr.visit_with(self),
             }
@@ -896,11 +896,15 @@ fn verify_resolved<'ast, 't>(program: &'ast Program<'ast>, res: &'t Resolution<'
             match pat.kind {
                 PatKind::Var(id) => {
                     let res = self.res.res.get(&id.ast_id);
-                    assert!(res.is_some(), "{:?} not resolved", pat);
+                    assert!(matches!(res, Some(Res::Local(_))), "{:?} not resolved", pat);
                 }
                 PatKind::Cons(path, pats) => {
                     let res = self.res.res.get(&path.ast_id);
                     assert!(res.is_some(), "{:?} not resolved", pat);
+                    let res = res.unwrap();
+                    let cons = self.res.constructors.get(&res.res_id());
+                    assert!(cons.is_some());
+
                     for pat in pats {
                         self.visit_pat(pat);
                     }

@@ -33,6 +33,17 @@ pub struct Environment<'t> {
     pub ast: Map<AstId, Ty<'t>>,
 }
 
+impl<'t> Environment<'t> {
+    fn apply(&mut self, subs: &Substitution<'t>) {
+        for ty in self.res.values_mut() {
+            *ty = subs.apply(*ty);
+        }
+        for ty in self.ast.values_mut() {
+            *ty = subs.apply(*ty);
+        }
+    }
+}
+
 struct Infer<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
@@ -61,10 +72,16 @@ impl<'ast, 't> Infer<'ast, 't> {
     }
 
     fn infer(mut self) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), InferError<'t>> {
+        for cons in self.res.constructors.values() {
+            self.env.res.insert(cons.decl, cons.ty);
+        }
         self.infer_comp_unit(self.program.unit)?;
         let main_ty = self.infer_expr(self.program.main)?;
         log::trace!("main : {main_ty}");
-        Ok((self.res, self.ctxt.arena.alloc(self.env)))
+        self.env.apply(&self.subs);
+        let env = self.ctxt.arena.alloc(self.env);
+        verify_inferred(self.program, self.res, env);
+        Ok((self.res, env))
     }
 
     fn type_from_lit(&self, lit: Lit) -> Ty<'t> {
@@ -264,6 +281,7 @@ impl<'ast, 't> Infer<'ast, 't> {
                     ExprKind::Cons(p) => self.infer_constructor(p),
                     _ => self.infer_expr(head),
                 }?;
+                self.env.ast.insert(head.ast_id, head_ty);
                 let mut arg_tys = Vec::new();
                 for arg in args {
                     let arg_ty = self.infer_expr(arg)?;
@@ -440,6 +458,49 @@ impl<'ast, 't> Infer<'ast, 't> {
                 self.eq(origin, ty, expected)?;
             }
         }
+        self.env.ast.insert(expr.ast_id, expected);
         Ok(())
     }
+}
+
+fn verify_inferred<'ast, 't>(
+    program: &'ast Program<'ast>,
+    res: &'t Resolution<'t>,
+    env: &'t Environment<'t>,
+) {
+    struct Verifier<'t> {
+        res: &'t Resolution<'t>,
+        env: &'t Environment<'t>,
+    }
+
+    impl<'ast> AstVisitor<'ast> for Verifier<'_> {
+        // FIXME likewise with resolving, this is horrible
+        fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
+            let ty = self.env.ast.get(&expr.ast_id);
+            assert!(ty.is_some(), "{:?} is untyped", expr);
+            let ty = ty.unwrap();
+            assert!(
+                ty.uni_vars().is_empty(),
+                "{:?} contains unification vars",
+                expr
+            );
+            match expr.kind {
+                ExprKind::Path(p) | ExprKind::Cons(p) => {
+                    let res = self.res[p.ast_id];
+                    let res_ty = self.env.res.get(&res);
+                    assert!(res_ty.is_some(), "{p} has no type for resolution");
+                    let res_ty = res_ty.unwrap();
+                    assert_eq!(ty.kind(), res_ty.kind());
+                }
+                _ => expr.visit_with(self),
+            }
+        }
+
+        fn visit_pat(&mut self, pat: &'ast Pat<'ast>) {
+            let ty = self.env.ast.get(&pat.ast_id);
+            assert!(ty.is_some(), "{:?} is untyped", pat);
+        }
+    }
+
+    Verifier { res, env }.visit_program(program);
 }
