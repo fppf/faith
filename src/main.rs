@@ -5,7 +5,7 @@ use driver::{Level, Mode, Pass, Source};
 fn main() {
     let args: Vec<_> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: {} FILE.fth [--no-std]", args[0]);
+        eprintln!("usage: {} FILE.fe [--no-std]", args[0]);
         std::process::exit(1);
     }
 

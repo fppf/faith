@@ -19,7 +19,7 @@ pub mod diag;
 
 pub use intern::{Ident, Sym};
 
-pub const SRC_EXT: &str = "fth";
+pub const SRC_EXT: &str = "fe";
 
 thread_local! {
     /// The global source map.

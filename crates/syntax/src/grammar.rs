@@ -92,8 +92,8 @@ fn parse_import(
 }
 
 fn std_import_item<'ast>(p: &mut Parser<'ast>) -> ParseResult<Option<Sp<Item<'ast>>>> {
-    let import_path =
-        std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into())).join("std.fth");
+    let import_path = std::path::Path::new(&std::env::var("FAITH_STD").unwrap_or("./lib".into()))
+        .join(format!("std.{}", span::SRC_EXT));
     if !import_path.exists() {
         span::diag::emit(Diagnostic::new(Level::Warn).with_message(format!(
             "cannot find standard library at '{}'",
