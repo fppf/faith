@@ -66,10 +66,13 @@ impl fmt::Display for Res {
 pub fn resolve_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-) -> Result<Resolution<'t>, Diagnostic> {
-    Resolver::new(ctxt, program)
+) -> Result<&'t Resolution<'t>, Diagnostic> {
+    let res = Resolver::new(ctxt, program)
         .resolve()
-        .map_err(Diagnostic::from)
+        .map_err(Diagnostic::from)?;
+    let res = ctxt.arena.alloc(res);
+    verify_resolved(program, res);
+    Ok(res)
 }
 
 pub struct Resolution<'t> {
@@ -507,6 +510,9 @@ impl<'ast, 't> Resolver<'ast, 't> {
                             for &(id, args) in variants {
                                 seen.update(Namespace::Value, id.ident)?;
                                 let cons_res_id = self.new_res_id();
+                                self.res
+                                    .res
+                                    .insert(id.ast_id, Res::Def(DefKind::Cons, cons_res_id));
                                 self.current_module_mut()
                                     .values
                                     .insert(id.ident, cons_res_id);
@@ -687,7 +693,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 Ok(())
             }
             PatKind::Tuple(ps) => self.resolve_pats(ps),
-            PatKind::Constructor(cons, ps) => {
+            PatKind::Cons(cons, ps) => {
                 self.resolve_path(Namespace::Value, cons)?;
                 self.resolve_pats(ps)
             }
@@ -706,7 +712,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
         match expr.kind {
             ExprKind::External(_) => Ok(()),
             ExprKind::Lit(l) => wf_lit(l, expr.span),
-            ExprKind::Path(p) | ExprKind::Constructor(p) => {
+            ExprKind::Path(p) | ExprKind::Cons(p) => {
                 let _ = self.resolve_path(Namespace::Value, p)?;
                 Ok(())
             }
@@ -843,4 +849,66 @@ impl Seen {
         self.spans[ns].insert(id.sym, id.span);
         Ok(())
     }
+}
+
+fn verify_resolved<'ast, 't>(program: &'ast Program<'ast>, res: &'t Resolution<'t>) {
+    struct Verifier<'t> {
+        res: &'t Resolution<'t>,
+    }
+
+    impl<'ast> AstVisitor<'ast> for Verifier<'_> {
+        // FIXME Needing this makes me want to reconsider a separate type for a resolved AST.
+        // Perhaps AST<A>, where A = () in parse and A = Res after resolve.
+        // This annotated AST would require the compiler to rebuild the AST, but avoids
+        // the problem of needing to programmatically maintain side tables with invariants.
+        fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
+            match expr.kind {
+                ExprKind::Path(path) => {
+                    let res = self.res.res.get(&path.ast_id);
+                    assert!(res.is_some(), "{:?} not resolved", expr);
+                    let res = res.unwrap();
+                    match res {
+                        Res::Def(DefKind::Value, _) => {
+                            let value = self.res.values.get(&res.res_id());
+                            assert!(value.is_some(), "{:?} does not have a resolved value", expr);
+                        }
+                        Res::Local(_) => (),
+                        _ => panic!("{:?} resolved to {res}", expr),
+                    }
+                }
+                ExprKind::Cons(path) => {
+                    let res = self.res.res.get(&path.ast_id);
+                    assert!(res.is_some(), "{:?} not resolved", expr);
+                    let res = res.unwrap();
+                    assert!(
+                        matches!(res, Res::Def(DefKind::Value, _)), // FIXME make Cons
+                        "{:?} resolved to {res}",
+                        expr,
+                    );
+                    //let cons = self.res.constructors.get(&res.res_id());
+                    //assert!(cons.is_some());
+                }
+                _ => expr.visit_with(self),
+            }
+        }
+
+        fn visit_pat(&mut self, pat: &'ast Pat<'ast>) {
+            match pat.kind {
+                PatKind::Var(id) => {
+                    let res = self.res.res.get(&id.ast_id);
+                    assert!(res.is_some(), "{:?} not resolved", pat);
+                }
+                PatKind::Cons(path, pats) => {
+                    let res = self.res.res.get(&path.ast_id);
+                    assert!(res.is_some(), "{:?} not resolved", pat);
+                    for pat in pats {
+                        self.visit_pat(pat);
+                    }
+                }
+                _ => pat.visit_with(self),
+            }
+        }
+    }
+
+    Verifier { res }.visit_program(program);
 }

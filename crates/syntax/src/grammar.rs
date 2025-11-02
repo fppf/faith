@@ -305,7 +305,7 @@ fn expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     Ok(Expr::new(
         match kind {
             PathKind::Path(IdentKind::Cons) | PathKind::Ident(IdentKind::Cons) => {
-                ExprKind::Constructor(path)
+                ExprKind::Cons(path)
             }
             _ => ExprKind::Path(path),
         },
@@ -593,7 +593,7 @@ fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
         IDENT(id, true) => {
             p.bump_any();
             Ok(Pat::new(
-                PatKind::Constructor(Path::new(id, &[], id.span, p.next_ast_id()), &[]),
+                PatKind::Cons(Path::new(id, &[], id.span, p.next_ast_id()), &[]),
                 p.end(m),
                 p.next_ast_id(),
             ))
@@ -671,7 +671,7 @@ fn pat_ctor<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
                 Vec::new()
             };
             Ok(Pat::new(
-                PatKind::Constructor(path, alloc_iter!(p, args)),
+                PatKind::Cons(path, alloc_iter!(p, args)),
                 p.end(m),
                 p.next_ast_id(),
             ))

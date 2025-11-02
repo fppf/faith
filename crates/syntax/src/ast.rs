@@ -71,9 +71,9 @@ impl Id {
 /// The `main` expression is the entry point to the program.
 #[derive(Clone, Debug)]
 pub struct Program<'ast> {
+    pub imports: Map<SourceId, &'ast CompUnit<'ast>>,
     pub unit: &'ast CompUnit<'ast>,
     pub main: &'ast Expr<'ast>,
-    pub imports: Map<SourceId, &'ast CompUnit<'ast>>,
 }
 
 /// A compilation unit, originating from a source file (`source_id`).
@@ -154,7 +154,7 @@ impl<'ast> Expr<'ast> {
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind<'ast> {
     Path(Path<'ast>),
-    Constructor(Path<'ast>),
+    Cons(Path<'ast>),
     External(Ident),
     Lit(Lit),
     Ann(&'ast Expr<'ast>, &'ast Sp<Type<'ast>>),
@@ -194,7 +194,7 @@ pub enum PatKind<'ast> {
     Var(Id),
     Ann(&'ast Pat<'ast>, &'ast Sp<Type<'ast>>),
     Tuple(&'ast [Pat<'ast>]),
-    Constructor(Path<'ast>, &'ast [Pat<'ast>]),
+    Cons(Path<'ast>, &'ast [Pat<'ast>]),
     Or(&'ast [Pat<'ast>]),
 }
 
@@ -218,6 +218,40 @@ impl Lit {
 }
 
 pub trait AstVisitor<'ast>: Sized {
+    fn visit_program(&mut self, program: &'ast Program<'ast>) {
+        for unit in program.imports.values() {
+            self.visit_comp_unit(unit);
+        }
+        self.visit_comp_unit(program.unit);
+        self.visit_expr(program.main);
+    }
+
+    fn visit_comp_unit(&mut self, unit: &'ast CompUnit<'ast>) {
+        for item in unit.items {
+            self.visit_item(item);
+        }
+    }
+
+    fn visit_item(&mut self, item: &'ast Item<'ast>) {
+        match item {
+            Item::Type(..) => (),
+            Item::Value(_, _, expr) => self.visit_expr(expr),
+            Item::Mod(_, mod_expr) => self.visit_mod_expr(mod_expr),
+        }
+    }
+
+    fn visit_mod_expr(&mut self, mod_expr: &'ast ModExpr<'ast>) {
+        match mod_expr {
+            ModExpr::Struct(items) => {
+                for item in items.iter() {
+                    self.visit_item(item);
+                }
+            }
+            ModExpr::Path(_) => (),
+            ModExpr::Import(_) => (),
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
         expr.visit_with(self);
     }
@@ -233,10 +267,7 @@ impl<'ast> Expr<'ast> {
         V: AstVisitor<'ast>,
     {
         match self.kind {
-            ExprKind::Path(_)
-            | ExprKind::Constructor(_)
-            | ExprKind::External(_)
-            | ExprKind::Lit(_) => (),
+            ExprKind::Path(_) | ExprKind::Cons(_) | ExprKind::External(_) | ExprKind::Lit(_) => (),
             ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) | ExprKind::Vector(exprs) => {
                 exprs.iter().for_each(|expr| v.visit_expr(expr))
@@ -284,7 +315,7 @@ impl<'ast> Pat<'ast> {
         match self.kind {
             PatKind::Wild | PatKind::Lit(_) | PatKind::Var(_) => (),
             PatKind::Ann(pat, _) => v.visit_pat(pat),
-            PatKind::Constructor(_, pats) | PatKind::Tuple(pats) | PatKind::Or(pats) => {
+            PatKind::Cons(_, pats) | PatKind::Tuple(pats) | PatKind::Or(pats) => {
                 pats.iter().for_each(|pat| v.visit_pat(pat))
             }
         }

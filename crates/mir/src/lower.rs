@@ -190,7 +190,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 let var = self.get_var(path);
                 self.lower_expr_ret(Value::Var(var), ctx)
             }
-            ExprKind::Constructor(path) => {
+            ExprKind::Cons(path) => {
                 todo!()
             }
             ExprKind::External(s) => self.lower_expr_ret(Value::External(s.sym), ctx),
@@ -279,7 +279,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             PatKind::Ann(p, _) => self.acc_lambda_binds(*p, binds),
             PatKind::Lit(_) => panic!("literal pattern as lambda argument"),
             PatKind::Or(_) => panic!("or pattern as lambda argument"),
-            PatKind::Constructor(..) => {
+            PatKind::Cons(..) => {
                 panic!("constructor pattern as lambda argument")
             }
         }
@@ -432,7 +432,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 }
                 binds
             }
-            PatKind::Constructor(..) => {
+            PatKind::Cons(..) => {
                 // We could allow this when the pattern is irrefutable,
                 // i.e., only one constructor for the ADT.
                 todo!("implement irrefutable pattern destructuring")

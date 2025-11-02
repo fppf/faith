@@ -22,7 +22,6 @@ pub fn infer_program_in<'ast, 't>(
     program: &'ast Program<'ast>,
 ) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), Diagnostic> {
     let res = resolve::resolve_program_in(ctxt, program)?;
-    let res = ctxt.arena.alloc(res);
     Infer::new(ctxt, program, res)
         .infer()
         .map_err(Diagnostic::from)
@@ -250,10 +249,10 @@ impl<'ast, 't> Infer<'ast, 't> {
 
     fn infer_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
         let ty = match expr.kind {
-            ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Constructor(_) => {
+            ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Cons(_) => {
                 let (head, args) = match expr.kind {
                     ExprKind::Call(head, args) => (head, args),
-                    ExprKind::Path(_) | ExprKind::Constructor(_) => (expr, &[] as &[_]),
+                    ExprKind::Path(_) | ExprKind::Cons(_) => (expr, &[] as &[_]),
                     _ => unreachable!(),
                 };
                 let head_ty = match head.kind {
@@ -262,7 +261,7 @@ impl<'ast, 't> Infer<'ast, 't> {
                         let res = self.res[p.ast_id];
                         Ok(self.env.res[&res])
                     }
-                    ExprKind::Constructor(p) => self.infer_constructor(p),
+                    ExprKind::Cons(p) => self.infer_constructor(p),
                     _ => self.infer_expr(head),
                 }?;
                 let mut arg_tys = Vec::new();
@@ -385,7 +384,7 @@ impl<'ast, 't> Infer<'ast, 't> {
                 expected
             }
             PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
-            PatKind::Constructor(cons, args) => {
+            PatKind::Cons(cons, args) => {
                 let cons_ty = self.infer_constructor(cons)?;
                 if args.is_empty() {
                     cons_ty
