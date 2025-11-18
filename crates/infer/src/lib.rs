@@ -278,7 +278,12 @@ impl<'ast, 't> Infer<'ast, 't> {
                         let res = self.res[p.ast_id];
                         Ok(self.env.res[&res])
                     }
-                    ExprKind::Cons(p) => self.infer_constructor(p),
+                    ExprKind::Cons(p) => {
+                        let ty = self.infer_constructor(p)?;
+                        let res = self.res[p.ast_id];
+                        self.env.res.insert(res, ty);
+                        Ok(ty)
+                    }
                     _ => self.infer_expr(head),
                 }?;
                 self.env.ast.insert(head.ast_id, head_ty);
@@ -463,6 +468,40 @@ impl<'ast, 't> Infer<'ast, 't> {
     }
 }
 
+fn eq_alpha<'t>(a: Ty<'t>, b: Ty<'t>) -> bool {
+    #[derive(Default)]
+    struct VarMap {
+        type_vars: Map<Ident, Ident>,
+    }
+
+    fn go<'a>(map: &mut VarMap, lhs: Ty<'a>, rhs: Ty<'a>) -> bool {
+        match (*lhs.kind(), *rhs.kind()) {
+            (lhs, rhs) if lhs == rhs => true,
+            (TyKind::Var(l), TyKind::Var(r)) => match map.type_vars.get(&l.name) {
+                Some(id) => *id == r.name,
+                None => {
+                    map.type_vars.insert(l.name, r.name);
+                    true
+                }
+            },
+            (TyKind::Uni(_), _) | (_, TyKind::Uni(_)) => unreachable!(),
+            (TyKind::App(l_res, l_args), TyKind::App(r_res, r_args)) => {
+                l_res == r_res
+                    && l_args.len() == r_args.len()
+                    && l_args.iter().zip(r_args).all(|(&l, &r)| go(map, l, r))
+            }
+            (TyKind::Arrow(l1, l2), TyKind::Arrow(r1, r2)) => go(map, l1, r1) && go(map, l2, r2),
+            (TyKind::Vector(l), TyKind::Vector(r)) => go(map, l, r),
+            (TyKind::Tuple(ls), TyKind::Tuple(rs)) => {
+                ls.len() == rs.len() && ls.iter().zip(rs).all(|(&l, &r)| go(map, l, r))
+            }
+            (_, _) => false,
+        }
+    }
+
+    go(&mut VarMap::default(), a, b)
+}
+
 fn verify_inferred<'ast, 't>(
     program: &'ast Program<'ast>,
     res: &'t Resolution<'t>,
@@ -477,12 +516,11 @@ fn verify_inferred<'ast, 't>(
         // FIXME likewise with resolving, this is horrible
         fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
             let ty = self.env.ast.get(&expr.ast_id);
-            assert!(ty.is_some(), "{:?} is untyped", expr);
+            assert!(ty.is_some(), "{expr:?} is untyped");
             let ty = ty.unwrap();
             assert!(
                 ty.uni_vars().is_empty(),
-                "{:?} contains unification vars",
-                expr
+                "{expr:?} contains unification vars",
             );
             match expr.kind {
                 ExprKind::Path(p) | ExprKind::Cons(p) => {
@@ -490,7 +528,11 @@ fn verify_inferred<'ast, 't>(
                     let res_ty = self.env.res.get(&res);
                     assert!(res_ty.is_some(), "{p} has no type for resolution");
                     let res_ty = res_ty.unwrap();
-                    assert_eq!(ty.kind(), res_ty.kind());
+                    assert!(
+                        eq_alpha(*ty, *res_ty),
+                        "{p}@{0:?} has type {ty} but resolution has type {res_ty}",
+                        p.span,
+                    );
                 }
                 _ => expr.visit_with(self),
             }
@@ -498,7 +540,7 @@ fn verify_inferred<'ast, 't>(
 
         fn visit_pat(&mut self, pat: &'ast Pat<'ast>) {
             let ty = self.env.ast.get(&pat.ast_id);
-            assert!(ty.is_some(), "{:?} is untyped", pat);
+            assert!(ty.is_some(), "{pat:?} is untyped");
         }
     }
 

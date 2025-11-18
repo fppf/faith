@@ -116,7 +116,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
 
     fn lower(mut self) -> mir::Program {
         for (res_id, ctor) in &self.resolution.constructors {
-            // TODO
+            self.get_or_insert_var(ctor.id);
         }
         self.lower_comp_unit(self.program.unit);
         let main = self.lower_expr(self.program.main);
@@ -191,7 +191,8 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 self.lower_expr_ret(Value::Var(var), ctx)
             }
             ExprKind::Cons(path) => {
-                todo!()
+                let var = self.get_var(path);
+                self.lower_expr_ret(Value::Var(var), ctx)
             }
             ExprKind::External(s) => self.lower_expr_ret(Value::External(s.sym), ctx),
             ExprKind::Lit(lit) => {
