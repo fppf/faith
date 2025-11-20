@@ -46,6 +46,7 @@ enum Ctx<'ast> {
         &'ast ast::Expr<'ast>,
         Box<Ctx<'ast>>,
     ),
+    Seq(&'ast ast::Expr<'ast>, Box<Ctx<'ast>>),
 }
 
 enum ListKind {
@@ -258,9 +259,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 assert!(!binds.is_empty());
                 self.lower_expr_ctx(&binds[0].1, Ctx::Let(binds, 1, body, Box::new(ctx)))
             }
-            ExprKind::Seq(e1, e2) => {
-                todo!()
-            }
+            ExprKind::Seq(e1, e2) => self.lower_expr_ctx(e1, Ctx::Seq(e2, Box::new(ctx))),
         }
     }
 
@@ -399,6 +398,15 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                     lhs: tmp,
                     rhs: mir::Rhs::Value(value),
                     body: Box::new(body),
+                })
+            }
+            Ctx::Seq(e2, ctx) => {
+                let (_, unused) = self.insert_var("seq");
+                let e2 = self.lower_expr_ctx(e2, *ctx);
+                mir::Expr::new(mir::ExprKind::Let {
+                    lhs: unused,
+                    rhs: mir::Rhs::Value(value),
+                    body: Box::new(e2),
                 })
             }
         }
