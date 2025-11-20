@@ -217,7 +217,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                         Ctx::List(ListKind::Vector, es, 1, Vec::new(), Box::new(ctx)),
                     )
                 } else {
-                    todo!()
+                    self.lower_expr_ret(Value::Lit(mir::Lit::EmptyVector), ctx)
                 }
             }
             ExprKind::Call(f, args) => self.lower_expr_ctx(

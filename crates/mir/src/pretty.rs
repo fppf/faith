@@ -24,6 +24,7 @@ impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Lit::Unit => "()".fmt(f),
+            Lit::EmptyVector => "[]".fmt(f),
             Lit::Bool(b) => b.fmt(f),
             Lit::Int32(n) => n.fmt(f),
             Lit::Str(s) => write!(f, "\"{s}\""),

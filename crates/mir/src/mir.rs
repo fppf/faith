@@ -119,6 +119,7 @@ pub struct Closure {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lit {
     Unit,
+    EmptyVector,
     Bool(bool),
     Int32(i32),
     Str(Sym),
