@@ -10,9 +10,7 @@
 // assert (unsafely) that a generic type's destructor is guaranteed to not access any
 // expired data, even if its type gives it the capability to do so.
 #![feature(dropck_eyepatch)]
-#![feature(array_windows)]
 #![feature(never_type)]
-#![feature(maybe_uninit_slice)]
 pub mod arena;
 pub mod hash;
 pub mod index;
