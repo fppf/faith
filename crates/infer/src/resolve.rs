@@ -18,7 +18,7 @@ use syntax::ast::{
 
 use crate::{
     DefKind, Res, ResId,
-    hir::{self, Var},
+    hir::{self, HirVisitor, Var},
     ty::{Adt, Constructor, Ty, TyCtxt, TyKind, TypeVar},
 };
 
@@ -558,34 +558,23 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 // to allow for recursive functions.
                 self.current_module_mut().values.insert(ident, val_res);
 
-                let new_expr = self.resolve_expr(expr)?;
+                let mut new_expr = self.resolve_expr(expr)?;
 
-                struct RecursiveVisitor<'a, 'ast, 't> {
-                    resolver: &'a mut Resolver<'ast, 't>,
+                struct RecursiveVisitor {
                     res: Res,
                     recursive_function: bool,
                     recursive_value: bool,
                 }
 
-                /*
-                 FIXME
-                impl<'ast> AstVisitor<'ast> for RecursiveVisitor<'_, 'ast, '_> {
-                    fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
-                        // N.B. we successfully resolved expr; a failed resolution
-                        //      will be a lambda parameter out of scope.
-                        match expr.kind {
-                            ExprKind::Path(p) => {
-                                if let Ok(res) = self.resolver.resolve_path(Namespace::Value, p)
-                                {
-                                    self.recursive_value = res.res_id() == self.res_id;
-                                }
+                impl<'t> HirVisitor<'t> for RecursiveVisitor {
+                    fn visit_expr(&mut self, expr: &mut hir::Expr<'t>) {
+                        match &mut expr.kind {
+                            hir::ExprKind::Var(v) => {
+                                self.recursive_value = v.res == self.res;
                             }
-                            ExprKind::Call(f, args) => {
-                                if let ExprKind::Path(p) = f.kind
-                                    && let Ok(res) =
-                                        self.resolver.resolve_path(Namespace::Value, p)
-                                {
-                                    self.recursive_function = res.res_id() == self.res_id;
+                            hir::ExprKind::Call(f, args) => {
+                                if let hir::ExprKind::Var(v) = f.kind {
+                                    self.recursive_function = v.res == self.res;
                                 }
                                 for arg in args {
                                     self.visit_expr(arg);
@@ -595,15 +584,13 @@ impl<'ast, 't> Resolver<'ast, 't> {
                         }
                     }
                 }
-                */
 
                 let mut recursive_visitor = RecursiveVisitor {
-                    resolver: self,
                     res: val_res,
                     recursive_function: false,
                     recursive_value: false,
                 };
-                // FIXME recursive_visitor.visit_expr(expr);
+                recursive_visitor.visit_expr(&mut new_expr);
 
                 // Guard against recursive values, i.e. val x = x
                 if recursive_visitor.recursive_value {

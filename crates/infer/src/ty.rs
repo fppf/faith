@@ -7,7 +7,7 @@ use base::{
 };
 use span::Ident;
 
-use crate::{Res, Var};
+use crate::Res;
 
 base::declare_arena!('t, []);
 
