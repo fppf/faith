@@ -1,8 +1,10 @@
 #![feature(never_type)]
 
+use std::{fmt, marker::PhantomData};
+
 use base::hash::Map;
-use span::{Ident, Sp, Span, Sym, diag::Diagnostic};
-use syntax::ast::*;
+use span::{Ident, Span, Sym, diag::Diagnostic};
+use syntax::ast;
 
 mod error;
 mod resolve;
@@ -14,77 +16,88 @@ use substitution::Substitution;
 use ty::{Skolem, SkolemId, Ty, TyCtxt, TyKind, TypeFolder, TypeVar};
 use unify::Origin;
 
+pub mod hir;
 pub mod ty;
-pub use resolve::{Constructor, Res, ResId, Resolution, Value};
+
+use hir::*;
 
 pub fn infer_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
-    program: &'ast Program<'ast>,
-) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), Diagnostic> {
-    let res = resolve::resolve_program_in(ctxt, program)?;
-    Infer::new(ctxt, program, res)
-        .infer()
-        .map_err(Diagnostic::from)
+    program: &'ast ast::Program<'ast>,
+) -> Result<Program<'t>, Diagnostic> {
+    let mut hir = resolve::resolve_program_in(ctxt, program)?;
+    Infer::new(ctxt).infer(&mut hir).map_err(Diagnostic::from)?;
+    Ok(hir)
 }
 
-#[derive(Default)]
-pub struct Environment<'t> {
-    pub res: Map<Res, Ty<'t>>,
-    pub ast: Map<AstId, Ty<'t>>,
-}
-
-impl<'t> Environment<'t> {
-    fn apply(&mut self, subs: &Substitution<'t>) {
-        for ty in self.res.values_mut() {
-            *ty = subs.apply(*ty);
-        }
-        for ty in self.ast.values_mut() {
-            *ty = subs.apply(*ty);
-        }
-    }
-}
-
-struct Infer<'ast, 't> {
+struct Infer<'a, 't> {
     ctxt: &'t TyCtxt<'t>,
-    program: &'ast Program<'ast>,
-    res: &'t Resolution<'t>,
-    env: Environment<'t>,
+
     subs: Substitution<'t>,
+
+    variables: Map<Res, Ty<'t>>,
 
     bool_ty: Ty<'t>,
     unit_ty: Ty<'t>,
+
     skolem: SkolemId,
+
+    // TODO. remove
+    _m: PhantomData<&'a ()>,
 }
 
-impl<'ast, 't> Infer<'ast, 't> {
-    fn new(ctxt: &'t TyCtxt<'t>, program: &'ast Program<'ast>, res: &'t Resolution<'t>) -> Self {
+impl<'a, 't> Infer<'a, 't> {
+    fn new(ctxt: &'t TyCtxt<'t>) -> Self {
         Self {
             ctxt,
-            program,
-            res,
-            env: Environment::default(),
             subs: Substitution::new(ctxt),
+            variables: Map::default(),
 
-            bool_ty: Ty::new(ctxt, TyKind::Base(BaseType::Bool)),
-            unit_ty: Ty::new(ctxt, TyKind::Base(BaseType::Unit)),
+            bool_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Bool)),
+            unit_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Unit)),
             skolem: SkolemId::ZERO,
+            _m: PhantomData,
         }
     }
 
-    fn infer(mut self) -> Result<(&'t Resolution<'t>, &'t Environment<'t>), InferError<'t>> {
-        for cons in self.res.constructors.values() {
-            self.env.res.insert(cons.decl, cons.ty);
+    fn infer(mut self, program: &mut Program<'t>) -> Result<(), InferError<'t>> {
+        for (_, import) in &mut program.imports {
+            self.infer_comp_unit(import)?;
         }
-        self.infer_comp_unit(self.program.unit)?;
-        let main_ty = self.infer_expr(self.program.main)?;
-        log::trace!("main : {main_ty}");
-        self.env.apply(&self.subs);
-        let env = self.ctxt.arena.alloc(self.env);
-        verify_inferred(self.program, self.res, env);
-        Ok((self.res, env))
+        self.infer_comp_unit(&mut program.unit)?;
+        self.infer_expr(&mut program.main)?;
+
+        struct ApplyFinalSubstitution<'a, 't> {
+            subs: &'a Substitution<'t>,
+        }
+
+        impl<'a, 't> HirVisitor<'t> for ApplyFinalSubstitution<'a, 't> {
+            fn visit_var(&mut self, var: &mut Var<'t>) {
+                assert!(var.typ.is_some(), "variable {var} has no type");
+                var.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+            }
+
+            fn visit_expr(&mut self, expr: &mut Expr<'t>) {
+                assert!(expr.typ.is_some(), "expression {expr:?} has no type");
+                expr.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+                expr.visit_with(self);
+            }
+
+            fn visit_pat(&mut self, pat: &mut Pat<'t>) {
+                assert!(pat.typ.is_some(), "pattern {pat:?} has no type");
+                pat.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+                pat.visit_with(self);
+            }
+        }
+
+        let mut applier = ApplyFinalSubstitution { subs: &self.subs };
+        applier.visit_program(program);
+
+        log::trace!("main : {}", program.main.typ.unwrap());
+        Ok(())
     }
 
-    fn type_from_lit(&self, lit: Lit) -> Ty<'t> {
+    fn type_from_lit(&self, lit: ast::Lit) -> Ty<'t> {
         Ty::new(self.ctxt, TyKind::Base(lit.base_type()))
     }
 
@@ -186,27 +199,28 @@ impl<'ast, 't> Infer<'ast, 't> {
         .fold(ty)
     }
 
-    fn infer_comp_unit(&mut self, unit: &'ast CompUnit<'ast>) -> Result<(), InferError<'t>> {
-        self.infer_items(unit.items)
+    fn infer_comp_unit(&mut self, unit: &mut CompUnit<'t>) -> Result<(), InferError<'t>> {
+        self.infer_items(&mut unit.items)
     }
 
-    fn infer_items(&mut self, items: &'ast [Sp<Item<'ast>>]) -> Result<(), InferError<'t>> {
+    fn infer_items(&mut self, items: &mut Vec<Item<'t>>) -> Result<(), InferError<'t>> {
         log::trace!("{{");
         log::block_in();
-        for item in items {
-            match item.value {
-                Item::Type(..) => (),
-                Item::Value(id, ast_ty, expr) => {
-                    let res = self.res[id.ast_id];
-                    let value =
-                        self.res.values.get(&res.res_id()).unwrap_or_else(|| {
-                            panic!("ICE: expected '{id}' to be resolved to {res}")
-                        });
-                    let ty = if value.recursive {
+        for item in items.iter_mut() {
+            match item {
+                Item::Expr {
+                    recursive,
+                    expr,
+                    expected_typ,
+                    typ,
+                } => {
+                    log::trace!("[infer item] recursive={recursive}, expr={expr:?}");
+                    assert!(typ.is_none());
+                    let ty = if *recursive {
                         // FIXME
                         self.fresh_var()
                     } else {
-                        match value.ty {
+                        match expected_typ {
                             Some(ty) => {
                                 // Suppose we have a silly declaration like val id x : 'a -> 'a = ().
                                 //
@@ -219,13 +233,13 @@ impl<'ast, 't> Infer<'ast, 't> {
                                 // ==> '0 == '1 == (), and we succeed...oops.
                                 //
                                 // With skolemization of 'a -> 'a to #'a -> #'a, #'a cannot unify with ().
-                                let skol_ty = self.skolemize(ty);
+                                let skol_ty = self.skolemize(ty.value);
                                 self.check_expr(
                                     expr,
                                     skol_ty,
-                                    Origin::Generic(expr.span, ast_ty.unwrap().span()),
+                                    Origin::Generic(expr.span, ty.span()),
                                 )?;
-                                ty
+                                ty.value
                             }
                             None => {
                                 let ty = self.infer_expr(expr)?;
@@ -233,12 +247,8 @@ impl<'ast, 't> Infer<'ast, 't> {
                             }
                         }
                     };
-                    log::trace!("{id} : {ty}");
-                    self.env.res.insert(res, ty);
-                }
-                Item::Mod(id, mexpr) => {
-                    log::trace!("mod {id}");
-                    self.infer_mod_expr(mexpr)?;
+                    expr.typ = Some(ty);
+                    *typ = Some(ty);
                 }
             }
         }
@@ -247,78 +257,59 @@ impl<'ast, 't> Infer<'ast, 't> {
         Ok(())
     }
 
-    fn infer_mod_expr(&mut self, mexpr: &'ast Sp<ModExpr<'ast>>) -> Result<(), InferError<'t>> {
-        match mexpr.value {
-            ModExpr::Import(source_id) => {
-                let comp_unit = self
-                    .program
-                    .imports
-                    .get(&source_id)
-                    .expect("HIR lowering produced an invalid source_id for an import");
-                self.infer_comp_unit(comp_unit)
-            }
-            ModExpr::Path(_path) => {
-                todo!()
-            }
-            ModExpr::Struct(items) => self.infer_items(items),
-        }
-    }
+    fn infer_expr(&mut self, expr: &mut Expr<'t>) -> Result<Ty<'t>, InferError<'t>> {
+        let ty = match &mut expr.kind {
+            ExprKind::Var(v) => match &mut v.typ {
+                Some(typ) => *typ,
+                None => {
+                    let typ = *self
+                        .variables
+                        .get(&v.res)
+                        .expect(&format!("no type for var {v}"));
+                    v.typ = Some(typ);
+                    typ
+                }
+            },
+            ExprKind::Call(head, args) => {
+                let head_span = head.span;
+                let head_ty = self.infer_expr(head)?;
 
-    fn infer_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let ty = match expr.kind {
-            ExprKind::Call(..) | ExprKind::Path(_) | ExprKind::Cons(_) => {
-                let (head, args) = match expr.kind {
-                    ExprKind::Call(head, args) => (head, args),
-                    ExprKind::Path(_) | ExprKind::Cons(_) => (expr, &[] as &[_]),
-                    _ => unreachable!(),
-                };
-                let head_ty = match head.kind {
-                    ExprKind::Path(p) => {
-                        // FIXME query defining span
-                        let res = self.res[p.ast_id];
-                        Ok(self.env.res[&res])
-                    }
-                    ExprKind::Cons(p) => {
-                        let ty = self.infer_constructor(p)?;
-                        let res = self.res[p.ast_id];
-                        self.env.res.insert(res, ty);
-                        Ok(ty)
-                    }
-                    _ => self.infer_expr(head),
-                }?;
-                self.env.ast.insert(head.ast_id, head_ty);
                 let mut arg_tys = Vec::new();
-                for arg in args {
+                for arg in args.iter_mut() {
                     let arg_ty = self.infer_expr(arg)?;
                     arg_tys.push(arg_ty);
                 }
+
                 let ret_ty = self.fresh_var();
                 self.eq(
-                    Origin::Generic(head.span, Span::dummy()),
+                    Origin::Generic(head_span, Span::dummy()),
                     Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
                     head_ty,
                 )?;
                 ret_ty
             }
-            ExprKind::External(_) => unreachable!(),
-            ExprKind::Lit(l) => self.type_from_lit(l),
+            ExprKind::Lit(l) => self.type_from_lit(*l),
             ExprKind::Lambda(lambda) => {
-                let arg_tys = self.infer_pats(lambda.args)?;
-                let body_ty = self.infer_expr(lambda.body)?;
+                let arg_tys = self.infer_pats(lambda.args.as_mut())?;
+                let body_ty = self.infer_expr(lambda.body.as_mut())?;
                 Ty::n_arrow(self.ctxt, arg_tys, body_ty)
             }
             ExprKind::Let(binds, body) => {
                 for (pat, bind) in binds {
+                    let pat_span = pat.span;
                     let pat_ty = self.infer_pat(pat)?;
+
+                    let bind_span = bind.span;
                     let bind_ty = self.infer_expr(bind)?;
-                    self.eq(Origin::Generic(pat.span, bind.span), pat_ty, bind_ty)?;
+
+                    self.eq(Origin::Generic(pat_span, bind_span), pat_ty, bind_ty)?;
                 }
-                self.infer_expr(body)?
+                self.infer_expr(body.as_mut())?
             }
             ExprKind::Ann(e, t) => {
-                let expected = self.res.annotations[&expr.ast_id];
-                let expected = self.skolemize(expected);
-                self.check_expr(e, expected, Origin::Generic(e.span, t.span))?;
+                let expected = self.skolemize(t.value);
+                let e_span = e.span;
+                self.check_expr(e.as_mut(), expected, Origin::Generic(e_span, t.span()))?;
                 expected
             }
             ExprKind::Tuple(elems) => {
@@ -331,11 +322,12 @@ impl<'ast, 't> Infer<'ast, 't> {
             ExprKind::Vector(elems) => {
                 let vector_base_ty = self.fresh_var();
                 for elem in elems {
+                    let elem_span = elem.span;
                     let elem_ty = self.infer_expr(elem)?;
                     self.eq(
                         Origin::Vector {
                             vector_span: expr.span,
-                            elem_span: elem.span,
+                            elem_span,
                         },
                         vector_base_ty,
                         elem_ty,
@@ -344,78 +336,77 @@ impl<'ast, 't> Infer<'ast, 't> {
                 Ty::new(self.ctxt, TyKind::Vector(vector_base_ty))
             }
             ExprKind::Case(scrutinee, arms) => {
-                let scrutinee_ty = self.infer_expr(scrutinee)?;
+                let scrutinee_span = scrutinee.span;
+                let scrutinee_ty = self.infer_expr(scrutinee.as_mut())?;
                 let var = self.fresh_var();
                 for (pat, arm) in arms {
+                    let pat_span = pat.span;
                     let pat_ty = self.infer_pat(pat)?;
                     self.eq(
-                        Origin::Generic(scrutinee.span, pat.span),
+                        Origin::Generic(scrutinee_span, pat_span),
                         scrutinee_ty,
                         pat_ty,
                     )?;
+
+                    let arm_span = arm.span;
                     let arm_ty = self.infer_expr(arm)?;
-                    self.eq(Origin::Generic(expr.span, arm.span), var, arm_ty)?;
+                    self.eq(Origin::Generic(expr.span, arm_span), var, arm_ty)?;
                 }
                 var
             }
-            ExprKind::If(cond, then_expr, else_expr) => {
-                self.check_expr(cond, self.bool_ty, Origin::If(cond.span))?;
-                let then_ty = self.infer_expr(then_expr)?;
-                let else_ty = self.infer_expr(else_expr)?;
-                self.eq(
-                    Origin::Generic(then_expr.span, else_expr.span),
-                    then_ty,
-                    else_ty,
-                )?;
+            ExprKind::If(cond_expr, then_expr, else_expr) => {
+                let cond_span = cond_expr.span;
+                let then_span = then_expr.span;
+                let else_span = else_expr.span;
+                self.check_expr(cond_expr.as_mut(), self.bool_ty, Origin::If(cond_span))?;
+                let then_ty = self.infer_expr(then_expr.as_mut())?;
+                let else_ty = self.infer_expr(else_expr.as_mut())?;
+                self.eq(Origin::Generic(then_span, else_span), then_ty, else_ty)?;
                 then_ty
             }
             ExprKind::Seq(e1, e2) => {
-                self.check_expr(e1, self.unit_ty, Origin::Seq(e1.span))?;
-                self.infer_expr(e2)?
+                let span = e1.span;
+                self.check_expr(e1.as_mut(), self.unit_ty, Origin::Seq(span))?;
+                self.infer_expr(e2.as_mut())?
             }
         };
-        self.env.ast.insert(expr.ast_id, ty);
+        expr.typ = Some(ty);
         Ok(ty)
     }
 
-    fn infer_constructor(&self, path: Path<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let res = self.res[path.ast_id];
-        Ok(self.res.constructors[&res.res_id()].ty)
-    }
-
     /// Infer a type for a pattern.
-    fn infer_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<Ty<'t>, InferError<'t>> {
-        let ty = match pat.kind {
+    fn infer_pat(&mut self, pat: &mut Pat<'t>) -> Result<Ty<'t>, InferError<'t>> {
+        let ty = match &mut pat.kind {
             PatKind::Wild => self.fresh_var(),
             PatKind::Var(id) => {
                 let var = self.fresh_var();
-                let res = self.res[id.ast_id];
-                self.env.res.insert(res, var);
+                id.typ = Some(var);
+                self.variables.insert(id.res, var);
                 var
             }
-            PatKind::Lit(l) => self.type_from_lit(l),
+            PatKind::Lit(l) => self.type_from_lit(*l),
             PatKind::Ann(p, t) => {
-                let expected = self.res.annotations[&pat.ast_id];
-                let expected = self.skolemize(expected);
+                let expected = self.skolemize(t.value);
                 match p.kind {
                     PatKind::Wild => (),
                     _ => {
+                        let span = p.span;
                         let ty = self.infer_pat(p)?;
-                        self.eq(Origin::Generic(p.span, t.span), ty, expected)?;
+                        self.eq(Origin::Generic(span, t.span), ty, expected)?;
                     }
                 }
                 expected
             }
             PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
             PatKind::Cons(cons, args) => {
-                let cons_ty = self.infer_constructor(cons)?;
+                let cons_ty = cons.typ.unwrap();
                 if args.is_empty() {
                     cons_ty
                 } else {
                     let arg_tys = self.infer_pats(args)?;
                     let ret_ty = self.fresh_var();
                     self.eq(
-                        Origin::Generic(pat.span, cons.span()),
+                        Origin::Generic(pat.span, cons.span),
                         Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
                         cons_ty,
                     )?;
@@ -424,11 +415,11 @@ impl<'ast, 't> Infer<'ast, 't> {
             }
             PatKind::Or(_pats) => todo!("implement or patterns"),
         };
-        self.env.ast.insert(pat.ast_id, ty);
+        pat.typ = Some(ty);
         Ok(ty)
     }
 
-    fn infer_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<Vec<Ty<'t>>, InferError<'t>> {
+    fn infer_pats(&mut self, pats: &mut Vec<Pat<'t>>) -> Result<Vec<Ty<'t>>, InferError<'t>> {
         let mut tys = Vec::with_capacity(pats.len());
         for pat in pats {
             tys.push(self.infer_pat(pat)?);
@@ -438,19 +429,20 @@ impl<'ast, 't> Infer<'ast, 't> {
 
     fn check_expr(
         &mut self,
-        expr: &'ast Expr<'ast>,
+        expr: &mut Expr<'t>,
         expected: Ty<'t>,
         origin: Origin,
     ) -> Result<(), InferError<'t>> {
-        match (expr.kind, expected.kind()) {
-            (ExprKind::External(_), _) => (),
+        match (&mut expr.kind, expected.kind()) {
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (ExprKind::Case(scrutinee, arms), _) => {
+                let scrutinee_span = scrutinee.span;
                 let scrutinee_ty = self.infer_expr(scrutinee)?;
                 for (pat, arm) in arms {
+                    let pat_span = pat.span;
                     let pat_ty = self.infer_pat(pat)?;
                     self.eq(
-                        Origin::Generic(scrutinee.span, pat.span),
+                        Origin::Generic(scrutinee_span, pat_span),
                         scrutinee_ty,
                         pat_ty,
                     )?;
@@ -463,7 +455,7 @@ impl<'ast, 't> Infer<'ast, 't> {
                 self.eq(origin, ty, expected)?;
             }
         }
-        self.env.ast.insert(expr.ast_id, expected);
+        expr.typ = Some(expected);
         Ok(())
     }
 }
@@ -502,47 +494,44 @@ fn eq_alpha<'t>(a: Ty<'t>, b: Ty<'t>) -> bool {
     go(&mut VarMap::default(), a, b)
 }
 
-fn verify_inferred<'ast, 't>(
-    program: &'ast Program<'ast>,
-    res: &'t Resolution<'t>,
-    env: &'t Environment<'t>,
-) {
-    struct Verifier<'t> {
-        res: &'t Resolution<'t>,
-        env: &'t Environment<'t>,
-    }
+base::newtype_index! {
+    pub struct ResId {}
+}
 
-    impl<'ast> AstVisitor<'ast> for Verifier<'_> {
-        // FIXME likewise with resolving, this is horrible
-        fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
-            let ty = self.env.ast.get(&expr.ast_id);
-            assert!(ty.is_some(), "{expr:?} is untyped");
-            let ty = ty.unwrap();
-            assert!(
-                ty.uni_vars().is_empty(),
-                "{expr:?} contains unification vars",
-            );
-            match expr.kind {
-                ExprKind::Path(p) | ExprKind::Cons(p) => {
-                    let res = self.res[p.ast_id];
-                    let res_ty = self.env.res.get(&res);
-                    assert!(res_ty.is_some(), "{p} has no type for resolution");
-                    let res_ty = res_ty.unwrap();
-                    assert!(
-                        eq_alpha(*ty, *res_ty),
-                        "{p}@{0:?} has type {ty} but resolution has type {res_ty}",
-                        p.span,
-                    );
-                }
-                _ => expr.visit_with(self),
+impl fmt::Display for ResId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "%{}", self.index())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Res {
+    Def(DefKind, ResId),
+    Local(ResId),
+}
+
+impl Res {
+    pub fn res_id(&self) -> ResId {
+        match *self {
+            Res::Def(_, res_id) | Res::Local(res_id) => res_id,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum DefKind {
+    Value,
+    Type,
+    Cons,
+}
+
+impl fmt::Display for Res {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Res::Def(kind, res_id) => {
+                write!(f, "{kind:?}:{res_id}")
             }
-        }
-
-        fn visit_pat(&mut self, pat: &'ast Pat<'ast>) {
-            let ty = self.env.ast.get(&pat.ast_id);
-            assert!(ty.is_some(), "{pat:?} is untyped");
+            Res::Local(res_id) => res_id.fmt(f),
         }
     }
-
-    Verifier { res, env }.visit_program(program);
 }

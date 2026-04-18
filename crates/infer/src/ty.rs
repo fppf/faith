@@ -1,22 +1,47 @@
-use std::{fmt, hash::Hash};
+use std::{cell::RefCell, fmt, hash::Hash};
 
 use base::{
     arena::Interned,
-    hash::{IndexSet, Set},
+    hash::{IndexSet, Map, Set},
     pp::FormatIterator,
 };
 use span::Ident;
 
-use crate::resolve::Res;
+use crate::{Res, Var};
 
-base::declare_arena!('t, [
-    resolution: crate::Resolution<'t>,
-    environment: crate::Environment<'t>,
-]);
+base::declare_arena!('t, []);
 
-#[derive(Default)]
 pub struct TyCtxt<'t> {
-    pub arena: Arena<'t>,
+    pub arena: &'t Arena<'t>,
+    pub adts: RefCell<Map<Res, Adt<'t>>>,
+}
+
+impl<'t> TyCtxt<'t> {
+    pub fn new(arena: &'t Arena<'t>) -> Self {
+        Self {
+            arena,
+            adts: RefCell::default(),
+        }
+    }
+
+    pub fn add_adt(&self, res: Res, adt: Adt<'t>) {
+        let mut adts = self.adts.borrow_mut();
+        adts.insert(res, adt);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Adt<'t> {
+    pub id: Ident,
+    pub constructors: Map<Res, Constructor<'t>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Constructor<'t> {
+    pub id: Ident,
+    pub ty: Ty<'t>,
+    pub arity: usize,
+    pub adt: Res,
 }
 
 /// A representation of a type during type inference.
@@ -28,6 +53,9 @@ pub enum TyKind<'t> {
     /// A base/builtin type.
     Base(syntax::ast::BaseType),
 
+    /// A user-defined type.
+    User(Ident, Res),
+
     /// Represents a unification type variable.
     /// For a successfully inferred program, these should all be substituted away.
     Uni(UniVar),
@@ -37,9 +65,8 @@ pub enum TyKind<'t> {
     /// Skolem/rigid type variable.
     Skolem(Skolem),
 
-    /// Type represented by a path to a type declaration,
-    /// with zero or more arguments.
-    App(Res, &'t [Ty<'t>]),
+    /// Type with arguments.
+    App(Ty<'t>, &'t [Ty<'t>]),
 
     /// Arrow type `a -> b`.
     Arrow(Ty<'t>, Ty<'t>),
@@ -182,13 +209,21 @@ impl<'t> Ty<'t> {
         V: TypeVisitor<'t>,
     {
         match *self.kind() {
-            TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => (),
+            TyKind::Base(_)
+            | TyKind::User(..)
+            | TyKind::Var(_)
+            | TyKind::Uni(_)
+            | TyKind::Skolem(_) => (),
             TyKind::Vector(t) => v.visit(t),
             TyKind::Arrow(t1, t2) => {
                 v.visit(t1);
                 v.visit(t2);
             }
-            TyKind::App(_, ts) | TyKind::Tuple(ts) => ts.iter().for_each(|&t| v.visit(t)),
+            TyKind::App(t, ts) => {
+                v.visit(t);
+                ts.iter().for_each(|&t| v.visit(t));
+            }
+            TyKind::Tuple(ts) => ts.iter().for_each(|&t| v.visit(t)),
         }
     }
 
@@ -197,9 +232,13 @@ impl<'t> Ty<'t> {
         F: TypeFolder<'t>,
     {
         let kind = match *self.kind() {
-            TyKind::Base(_) | TyKind::Var(_) | TyKind::Uni(_) | TyKind::Skolem(_) => return self,
+            TyKind::Base(_)
+            | TyKind::User(..)
+            | TyKind::Var(_)
+            | TyKind::Uni(_)
+            | TyKind::Skolem(_) => return self,
             TyKind::App(h, ts) => TyKind::App(
-                h,
+                f.fold(h),
                 f.ctxt()
                     .arena
                     .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
@@ -226,7 +265,7 @@ impl<'t> Ty<'t> {
         Ty::new(ctxt, TyKind::Tuple(ctxt.arena.alloc_from_iter(iter)))
     }
 
-    pub fn app<I>(ctxt: &'t TyCtxt<'t>, head: Res, args: I) -> Self
+    pub fn app<I>(ctxt: &'t TyCtxt<'t>, head: Ty<'t>, args: I) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
@@ -246,10 +285,6 @@ impl<'t> Ty<'t> {
             .into_iter()
             .rev()
             .fold(target, |acc, source| Ty::arrow(ctxt, source, acc))
-    }
-
-    pub fn path(ctxt: &'t TyCtxt<'t>, res: Res) -> Self {
-        Ty::new(ctxt, TyKind::App(res, &[]))
     }
 
     pub fn type_var(ctxt: &'t TyCtxt<'t>, var: TypeVar) -> Self {
@@ -331,10 +366,11 @@ impl fmt::Display for Ty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind() {
             TyKind::Base(b) => b.fmt(f),
+            TyKind::User(id, _res) => id.fmt(f),
             TyKind::Uni(u) => u.fmt(f),
             TyKind::Var(v) => v.fmt(f),
             TyKind::Skolem(s) => s.fmt(f),
-            TyKind::App(r, ts) => write!(f, "({} {})", r.res_id(), ts.iter().format(" ")),
+            TyKind::App(t, ts) => write!(f, "({t} {})", ts.iter().format(" ")),
             TyKind::Arrow(t1, t2) => write!(f, "({t1} -> {t2})"),
             TyKind::Tuple(ts) => write!(f, "({})", ts.iter().format(", ")),
             TyKind::Vector(t) => write!(f, "[{t}]"),

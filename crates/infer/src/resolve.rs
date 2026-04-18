@@ -6,91 +6,29 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use base::{
-    hash::{Map, Set},
-    index::IndexVec,
-};
+use base::{hash::Map, index::IndexVec};
 use span::{
     Ident, SourceId, Sp, Span, Sym,
     diag::{Diagnostic, Label, Level},
 };
 use syntax::ast::{
-    self, AstId, AstVisitor, CompUnit, Expr, ExprKind, Item, Lit, ModExpr, Pat, PatKind, Path,
-    Program, Type, TypeDeclKind,
+    self, AstVisitor, CompUnit, Expr, ExprKind, Item, Lit, ModExpr, Pat, PatKind, Path, Program,
+    Type, TypeDeclKind,
 };
 
-use crate::ty::{Ty, TyCtxt, TyKind, TypeVar};
-
-base::newtype_index! {
-    pub struct ResId {}
-}
-
-impl fmt::Display for ResId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "%{}", self.index())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Res {
-    Def(DefKind, ResId),
-    Local(ResId),
-}
-
-impl Res {
-    pub fn res_id(&self) -> ResId {
-        match *self {
-            Res::Def(_, res_id) | Res::Local(res_id) => res_id,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum DefKind {
-    Value,
-    Type,
-    Cons,
-}
-
-impl fmt::Display for Res {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Res::Def(kind, res_id) => {
-                write!(f, "{kind:?}:{res_id}")
-            }
-            Res::Local(res_id) => res_id.fmt(f),
-        }
-    }
-}
+use crate::{
+    DefKind, Res, ResId,
+    hir::{self, Var},
+    ty::{Adt, Constructor, Ty, TyCtxt, TyKind, TypeVar},
+};
 
 pub fn resolve_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
-) -> Result<&'t Resolution<'t>, Diagnostic> {
-    let res = Resolver::new(ctxt, program)
+) -> Result<hir::Program<'t>, Diagnostic> {
+    Resolver::new(ctxt, program)
         .resolve()
-        .map_err(Diagnostic::from)?;
-    let res = ctxt.arena.alloc(res);
-    verify_resolved(program, res);
-    Ok(res)
-}
-
-pub struct Resolution<'t> {
-    pub last_res_id: ResId,
-    pub res: Map<AstId, Res>,
-    pub values: Map<ResId, Value<'t>>,
-    pub constructors: Map<ResId, Constructor<'t>>,
-    pub types: Map<ResId, Ty<'t>>,
-    pub variants: Map<ResId, Set<Res>>,
-    pub annotations: Map<AstId, Ty<'t>>,
-}
-
-impl Index<AstId> for Resolution<'_> {
-    type Output = Res;
-
-    fn index(&self, ast_id: AstId) -> &Self::Output {
-        &self.res[&ast_id]
-    }
+        .map_err(Diagnostic::from)
 }
 
 #[derive(Debug)]
@@ -143,8 +81,9 @@ base::newtype_index! {
 #[derive(Debug)]
 struct Module {
     kind: ModuleKind,
-    values: Map<Ident, ResId>,
-    types: Map<Ident, ResId>,
+    values: Map<Ident, Res>,
+    cons: Map<Ident, Res>,
+    types: Map<Ident, Res>,
     children: Map<Ident, ModuleId>,
 }
 
@@ -153,6 +92,7 @@ impl Module {
         Self {
             kind,
             values: Map::default(),
+            cons: Map::default(),
             types: Map::default(),
             children: Map::default(),
         }
@@ -160,14 +100,9 @@ impl Module {
 
     fn get_res(&self, ns: Namespace, id: Ident) -> Option<Res> {
         match ns {
-            Namespace::Value => self
-                .values
-                .get(&id)
-                .map(|&res_id| Res::Def(DefKind::Value, res_id)),
-            Namespace::Type => self
-                .types
-                .get(&id)
-                .map(|&res_id| Res::Def(DefKind::Type, res_id)),
+            Namespace::Value => self.values.get(&id).copied(),
+            Namespace::Cons => self.cons.get(&id).copied(),
+            Namespace::Type => self.types.get(&id).copied(),
             Namespace::Mod => None,
         }
     }
@@ -182,6 +117,7 @@ enum ModuleKind {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Namespace {
     Value,
+    Cons,
     Type,
     Mod,
 }
@@ -190,6 +126,7 @@ impl fmt::Display for Namespace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Namespace::Value => "value",
+            Namespace::Cons => "cons",
             Namespace::Type => "type",
             Namespace::Mod => "module",
         }
@@ -200,6 +137,7 @@ impl fmt::Display for Namespace {
 #[derive(Clone, Copy, Default, Debug)]
 struct PerNs<T> {
     value_ns: T,
+    cons_ns: T,
     type_ns: T,
     mod_ns: T,
 }
@@ -210,6 +148,7 @@ impl<T> Index<Namespace> for PerNs<T> {
     fn index(&self, ns: Namespace) -> &Self::Output {
         match ns {
             Namespace::Value => &self.value_ns,
+            Namespace::Cons => &self.cons_ns,
             Namespace::Type => &self.type_ns,
             Namespace::Mod => &self.mod_ns,
         }
@@ -220,6 +159,7 @@ impl<T> IndexMut<Namespace> for PerNs<T> {
     fn index_mut(&mut self, ns: Namespace) -> &mut Self::Output {
         match ns {
             Namespace::Value => &mut self.value_ns,
+            Namespace::Cons => &mut self.cons_ns,
             Namespace::Type => &mut self.type_ns,
             Namespace::Mod => &mut self.mod_ns,
         }
@@ -274,38 +214,27 @@ impl<K: Eq + Hash + Clone, V> ScopedMap<K, V> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Value<'t> {
-    pub recursive: bool,
-    pub ty: Option<Ty<'t>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Constructor<'t> {
-    pub id: ast::Id,
-    pub ty: Ty<'t>,
-    pub arity: usize,
-    pub decl: Res,
-}
-
 struct Resolver<'ast, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
 
-    res: Resolution<'t>,
-
     // The graph of modules.
     modules: IndexVec<ModuleId, Module>,
     imports: Map<SourceId, ModuleId>,
+    units: Vec<hir::CompUnit<'t>>,
 
     // Stack of modules we are in.
     module_stack: Vec<ModuleId>,
 
     // Local bindings introduced by patterns.
-    locals: ScopedMap<Ident, Res>,
+    locals: ScopedMap<Ident, Var<'t>>,
+
+    variables: Map<Res, Var<'t>>,
 
     // Which module (comp unit or inline) we are processing.
     current_module_id: ModuleId,
+
+    last_res_id: ResId,
 }
 
 impl<'ast, 't> Resolver<'ast, 't> {
@@ -315,35 +244,67 @@ impl<'ast, 't> Resolver<'ast, 't> {
         Self {
             ctxt,
             program,
-            res: Resolution {
-                last_res_id: ResId::ZERO,
-                res: Map::default(),
-                values: Map::default(),
-                constructors: Map::default(),
-                types: Map::default(),
-                variants: Map::default(),
-                annotations: Map::default(),
-            },
             modules,
             imports: Map::default(),
+            units: Vec::with_capacity(program.imports.len()),
             module_stack: Vec::new(),
             locals: ScopedMap::default(),
+            variables: Map::default(),
             current_module_id,
+            last_res_id: ResId::ZERO,
         }
     }
 
-    fn resolve(mut self) -> Result<Resolution<'t>, ResolveError> {
-        self.with_module(self.current_module_id, |self_| {
-            self_.resolve_items(self.program.unit.items)?;
-            self_.resolve_expr(self.program.main)
+    fn resolve(mut self) -> Result<hir::Program<'t>, ResolveError> {
+        let (items, main) = self.with_module(self.current_module_id, |self_| {
+            let items = self_.resolve_items(self.program.unit.items)?;
+            let main = self_.resolve_expr(self.program.main)?;
+            Ok((items, main))
         })?;
-        Ok(self.res)
+
+        let this_unit = hir::CompUnit {
+            source_id: self.program.unit.source_id,
+            items,
+        };
+
+        let mut imports = Map::default();
+        for unit in self.units {
+            imports.insert(unit.source_id, unit);
+        }
+
+        Ok(hir::Program {
+            imports,
+            unit: this_unit,
+            main,
+        })
     }
 
     fn new_res_id(&mut self) -> ResId {
-        let next = self.res.last_res_id + 1;
-        self.res.last_res_id = next;
+        let next = self.last_res_id + 1;
+        self.last_res_id = next;
         next
+    }
+
+    fn make_var(&mut self, id: ast::Id, res: Res, typ: Option<Ty<'t>>) -> Var<'t> {
+        let mut var = Var::new(id.ident, res, id.ident.span);
+        var.typ = typ;
+        self.variables.insert(res, var);
+        var
+    }
+
+    fn make_external_var(&mut self, id: ast::Id, res: Res, typ: Ty<'t>, sym: Sym) -> Var<'t> {
+        let mut var = Var::new(id.ident, res, id.ident.span);
+        var.external = Some(sym);
+        var.typ = Some(typ);
+        self.variables.insert(res, var);
+        var
+    }
+
+    fn make_local(&mut self, id: ast::Id) -> Var<'t> {
+        let res = Res::Local(self.new_res_id());
+        let var = self.make_var(id, res, None);
+        self.locals.insert(id.ident, var);
+        var
     }
 
     fn current_module(&self) -> &Module {
@@ -382,25 +343,21 @@ impl<'ast, 't> Resolver<'ast, 't> {
         ret
     }
 
-    fn resolve_path(&mut self, ns: Namespace, path: Path<'ast>) -> Result<Res, ResolveError> {
-        // If already resolved, reuse.
-        // if let Some(&res) = self.res.res.get(&path.ast_id) {
-        //     return Ok(res);
-        // }
+    fn resolve_path(&mut self, ns: Namespace, path: Path<'ast>) -> Result<Var<'t>, ResolveError> {
+        // TODO. cache already resolved paths.
 
         let res = self.resolve_path_inner(ns, path)?;
         log::trace!("resolve_path {path} => {res}");
-        self.res.res.insert(path.ast_id, res);
         Ok(res)
     }
 
-    fn resolve_path_inner(&self, ns: Namespace, path: Path<'ast>) -> Result<Res, ResolveError> {
+    fn resolve_path_inner(&self, ns: Namespace, path: Path<'ast>) -> Result<Var<'t>, ResolveError> {
         if let Some(id) = path.as_ident() {
             // Attempt to find a pattern binding first.
             if ns == Namespace::Value
-                && let Some(&res) = self.locals.get(&id.ident)
+                && let Some(&var) = self.locals.get(&id.ident)
             {
-                return Ok(res);
+                return Ok(var);
             }
 
             // Traverse the current module stack outwards,
@@ -423,7 +380,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     break;
                 }
                 if let Some(res) = module.get_res(ns, id.ident) {
-                    return Ok(res);
+                    return Ok(self.variables[&res]);
                 }
             }
         }
@@ -436,9 +393,12 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 .get(&segment)
                 .and_then(|&module_id| self.modules.get(module_id))
                 .ok_or(ResolveError::Resolve(path.to_string(), path.span()))?;
+            log::trace!("    descend into {:?}", module);
         }
+
         module
             .get_res(ns, path.leaf())
+            .and_then(|res| self.variables.get(&res).copied())
             .ok_or_else(|| ResolveError::Resolve(path.to_string(), path.span()))
     }
 
@@ -446,7 +406,12 @@ impl<'ast, 't> Resolver<'ast, 't> {
         let module_id = self
             .modules
             .push(Module::new(ModuleKind::Unit(unit.source_id)));
-        self.with_module(module_id, |self_| self_.resolve_items(unit.items))?;
+        let items = self.with_module(module_id, |self_| self_.resolve_items(unit.items))?;
+        let unit = hir::CompUnit {
+            source_id: unit.source_id,
+            items,
+        };
+        self.units.push(unit);
         Ok(module_id)
     }
 
@@ -466,152 +431,199 @@ impl<'ast, 't> Resolver<'ast, 't> {
         }
     }
 
-    fn resolve_items(&mut self, items: &'ast [Sp<Item<'ast>>]) -> Result<(), ResolveError> {
+    fn resolve_items(
+        &mut self,
+        items: &'ast [Sp<Item<'ast>>],
+    ) -> Result<Vec<hir::Item<'t>>, ResolveError> {
+        let mut new_items = Vec::with_capacity(items.len());
         let mut seen = Seen::default();
         for item in items {
-            self.resolve_item(item, &mut seen)?;
+            new_items.extend(self.resolve_item(item, &mut seen)?);
         }
-        Ok(())
+        Ok(new_items)
     }
 
+    // Resolve an AST item to zero or more HIR items.
+    //
+    // Inline modules may produce items which will be flattened into
+    // the result.
+    //
+    // Some AST items (e.g. type decls) will not produce HIR items,
+    // and instead become metadata on the type context.
     fn resolve_item(
         &mut self,
         item: &'ast Sp<Item<'ast>>,
         seen: &mut Seen,
-    ) -> Result<(), ResolveError> {
+    ) -> Result<Vec<hir::Item<'t>>, ResolveError> {
         match item.value {
             Item::Type(decls) => {
-                // Must be done first to permit recursive type decls.
-                let mut decl_res = Vec::with_capacity(decls.len());
+                log::trace!("[resolve_item] Item::Type");
+                // To permit recursive type decls, we must first register all
+                // decls within the decl list.
+                let mut decl_vars = Vec::with_capacity(decls.len());
                 for decl in decls {
                     seen.update(Namespace::Type, decl.id.ident)?;
-                    let res = Res::Def(DefKind::Type, self.new_res_id());
-                    decl_res.push(res);
+
+                    let decl_res = Res::Def(DefKind::Type, self.new_res_id());
+                    let decl_typ = Ty::new(self.ctxt, TyKind::User(decl.id.ident, decl_res));
+                    let decl_var = self.make_var(decl.id, decl_res, Some(decl_typ));
+                    decl_vars.push(decl_var);
+
                     self.current_module_mut()
                         .types
-                        .insert(decl.id.ident, res.res_id());
-                    log::trace!("{} {} => {res}", decl.id.ident, decl.id.ast_id);
+                        .insert(decl.id.ident, decl_res);
+
+                    log::trace!("  {} => {decl_res}", decl.id);
                 }
-                for (decl, res) in decls.iter().zip(decl_res) {
+
+                for (decl, decl_var) in decls.iter().zip(decl_vars) {
                     match decl.kind {
                         TypeDeclKind::Alias(ast_ty) => {
-                            let ty = self.lower_type(ast_ty)?;
-                            self.res.types.insert(res.res_id(), ty);
+                            let _ty = self.lower_type(ast_ty)?;
                             todo!("fix alias implementation")
                         }
                         TypeDeclKind::Variant(variants) => {
+                            // A variant (ADT)
+                            //
+                            //   type T 'a1 .. 'ak =
+                            //      | C1 t11 t12 ..
+                            //      ..
+                            //      | Cn tn1 tn2 ..
+                            let adt_res = decl_var.res;
+
+                            // Construct (T 'a1 .. 'ak)
                             let ty = Ty::app(
                                 self.ctxt,
-                                res,
+                                decl_var.typ.unwrap(),
                                 decl.vars
                                     .iter()
                                     .map(|id| Ty::type_var(self.ctxt, TypeVar::new(id.ident))),
                             );
+
+                            let mut constructors = Map::default();
                             for &(id, args) in variants {
                                 seen.update(Namespace::Value, id.ident)?;
-                                let cons_res_id = self.new_res_id();
-                                self.res
-                                    .res
-                                    .insert(id.ast_id, Res::Def(DefKind::Cons, cons_res_id));
-                                self.current_module_mut()
-                                    .values
-                                    .insert(id.ident, cons_res_id);
+
+                                let cons_res = Res::Def(DefKind::Cons, self.new_res_id());
+
+                                self.current_module_mut().cons.insert(id.ident, cons_res);
 
                                 let mut new_args = Vec::with_capacity(args.len());
                                 for arg in args {
                                     new_args.push(self.lower_type_unscoped(arg)?);
                                 }
-                                self.res.constructors.insert(
-                                    cons_res_id,
-                                    Constructor {
-                                        id,
-                                        ty: Ty::n_arrow(self.ctxt, new_args.iter().copied(), ty),
-                                        arity: new_args.len(),
-                                        decl: res,
-                                    },
-                                );
+
+                                // Constructor (Ci ti1 .. tik) is given type
+                                // (ti1 -> .. -> tik -> (T 'a1 .. 'ak))
+                                let cons = Constructor {
+                                    id: id.ident,
+                                    ty: Ty::n_arrow(self.ctxt, new_args.iter().copied(), ty),
+                                    arity: new_args.len(),
+                                    adt: adt_res,
+                                };
+                                let _cons_var = self.make_var(id, cons_res, Some(cons.ty));
+                                constructors.insert(cons_res, cons);
+
+                                log::trace!("    {id} => {cons_res}");
                             }
-                            self.res.types.insert(res.res_id(), ty);
+
+                            let adt = Adt {
+                                id: decl.id.ident,
+                                constructors,
+                            };
+                            self.ctxt.add_adt(adt_res, adt);
                         }
                     }
                 }
             }
+            Item::External(id, ast_ty, mapped_to) => {
+                let ident = id.ident;
+                seen.update(Namespace::Value, ident)?;
+
+                let typ = self.lower_type(ast_ty)?;
+
+                let ext_res = Res::Def(DefKind::Value, self.new_res_id());
+                let _ext_var = self.make_external_var(id, ext_res, typ, mapped_to.sym);
+
+                self.current_module_mut().values.insert(ident, ext_res);
+            }
             Item::Value(id, ast_ty, expr) => {
                 let (ident, ast_id) = (id.ident, id.ast_id);
                 seen.update(Namespace::Value, ident)?;
-                let res_id = self.new_res_id();
-                let res = Res::Def(DefKind::Value, res_id);
-                self.res.res.insert(ast_id, res);
 
-                // Insert res_id into scope before resolving expr
+                let val_res = Res::Def(DefKind::Value, self.new_res_id());
+                let _val_var = self.make_var(id, val_res, None);
+
+                // Insert res into scope before resolving expr
                 // to allow for recursive functions.
-                self.current_module_mut().values.insert(ident, res_id);
+                self.current_module_mut().values.insert(ident, val_res);
 
-                self.resolve_expr(expr)?;
-                let value = if let ExprKind::External(_) = expr.kind {
-                    Value {
-                        recursive: false,
-                        ty: Some(self.lower_type(ast_ty.unwrap())?),
-                    }
-                } else {
-                    struct RecursiveVisitor<'a, 'ast, 't> {
-                        resolver: &'a mut Resolver<'ast, 't>,
-                        res_id: ResId,
-                        recursive_function: bool,
-                        recursive_value: bool,
-                    }
+                let new_expr = self.resolve_expr(expr)?;
 
-                    impl<'ast> AstVisitor<'ast> for RecursiveVisitor<'_, 'ast, '_> {
-                        fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
-                            // N.B. we successfully resolved expr; a failed resolution
-                            //      will be a lambda parameter out of scope.
-                            match expr.kind {
-                                ExprKind::Path(p) => {
-                                    if let Ok(res) = self.resolver.resolve_path(Namespace::Value, p)
-                                    {
-                                        self.recursive_value = res.res_id() == self.res_id;
-                                    }
+                struct RecursiveVisitor<'a, 'ast, 't> {
+                    resolver: &'a mut Resolver<'ast, 't>,
+                    res: Res,
+                    recursive_function: bool,
+                    recursive_value: bool,
+                }
+
+                /*
+                 FIXME
+                impl<'ast> AstVisitor<'ast> for RecursiveVisitor<'_, 'ast, '_> {
+                    fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
+                        // N.B. we successfully resolved expr; a failed resolution
+                        //      will be a lambda parameter out of scope.
+                        match expr.kind {
+                            ExprKind::Path(p) => {
+                                if let Ok(res) = self.resolver.resolve_path(Namespace::Value, p)
+                                {
+                                    self.recursive_value = res.res_id() == self.res_id;
                                 }
-                                ExprKind::Call(f, args) => {
-                                    if let ExprKind::Path(p) = f.kind
-                                        && let Ok(res) =
-                                            self.resolver.resolve_path(Namespace::Value, p)
-                                    {
-                                        self.recursive_function = res.res_id() == self.res_id;
-                                    }
-                                    for arg in args {
-                                        self.visit_expr(arg);
-                                    }
-                                }
-                                _ => expr.visit_with(self),
                             }
+                            ExprKind::Call(f, args) => {
+                                if let ExprKind::Path(p) = f.kind
+                                    && let Ok(res) =
+                                        self.resolver.resolve_path(Namespace::Value, p)
+                                {
+                                    self.recursive_function = res.res_id() == self.res_id;
+                                }
+                                for arg in args {
+                                    self.visit_expr(arg);
+                                }
+                            }
+                            _ => expr.visit_with(self),
                         }
                     }
+                }
+                */
 
-                    let mut recursive_visitor = RecursiveVisitor {
-                        resolver: self,
-                        res_id,
-                        recursive_function: false,
-                        recursive_value: false,
-                    };
-                    recursive_visitor.visit_expr(expr);
-
-                    // Guard against recursive values, i.e. val x = x
-                    if recursive_visitor.recursive_value {
-                        return Err(ResolveError::RecursiveValue(ident.sym, ident.span));
-                    }
-
-                    Value {
-                        recursive: recursive_visitor.recursive_function,
-                        ty: if let Some(ty) = ast_ty {
-                            Some(self.lower_type(ty)?)
-                        } else {
-                            None
-                        },
-                    }
+                let mut recursive_visitor = RecursiveVisitor {
+                    resolver: self,
+                    res: val_res,
+                    recursive_function: false,
+                    recursive_value: false,
                 };
-                self.res.values.insert(res_id, value);
-                log::trace!("{ident} {} => {res_id}", ast_id);
+                // FIXME recursive_visitor.visit_expr(expr);
+
+                // Guard against recursive values, i.e. val x = x
+                if recursive_visitor.recursive_value {
+                    return Err(ResolveError::RecursiveValue(ident.sym, ident.span));
+                }
+
+                let recursive = recursive_visitor.recursive_function;
+                let expected_typ = if let Some(ty) = ast_ty {
+                    Some(Sp::new(self.lower_type(ty)?, ty.span()))
+                } else {
+                    None
+                };
+
+                log::trace!("{ident} {} => {}", ast_id, val_res);
+                return Ok(vec![hir::Item::Expr {
+                    recursive,
+                    expr: new_expr,
+                    expected_typ,
+                    typ: None,
+                }]);
             }
             Item::Mod(id, mexpr) => {
                 seen.update(Namespace::Mod, id.ident)?;
@@ -622,7 +634,9 @@ impl<'ast, 't> Resolver<'ast, 't> {
                         self.current_module_mut()
                             .children
                             .insert(id.ident, module_id);
-                        self.with_module(module_id, |self_| self_.resolve_items(items))?;
+                        let new_items =
+                            self.with_module(module_id, |self_| self_.resolve_items(items))?;
+                        return Ok(new_items);
                     }
                     ModExpr::Import(path) => {
                         let module_id = self.resolve_import(id.ident, path)?;
@@ -633,7 +647,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 }
             }
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     fn lower_type(&mut self, typ: &'ast Sp<Type<'ast>>) -> Result<Ty<'t>, ResolveError> {
@@ -664,124 +678,147 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 Ty::new(self.ctxt, TyKind::Vector(t))
             }
             Type::App(head, ts) => {
-                let res = self.resolve_path(Namespace::Type, head)?;
+                let decl_var = self.resolve_path_inner(Namespace::Type, head)?;
+                let head = Ty::new(self.ctxt, TyKind::User(decl_var.id, decl_var.res));
                 let mut args = Vec::with_capacity(ts.len());
                 for t in ts.iter() {
                     args.push(self.lower_type_unscoped(t)?);
                 }
-                Ty::app(self.ctxt, res, args)
+                Ty::app(self.ctxt, head, args)
             }
             Type::Row(..) => todo!("implement record types"),
         };
         Ok(ty)
     }
 
-    fn resolve_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<(), ResolveError> {
-        match pat.kind {
-            PatKind::Wild => Ok(()),
-            PatKind::Lit(l) => wf_lit(l, pat.span),
-            PatKind::Var(id) => {
-                let res = Res::Local(self.new_res_id());
-                self.locals.insert(id.ident, res);
-                self.res.res.insert(id.ast_id, res);
-                Ok(())
-            }
+    fn resolve_pat(&mut self, pat: &'ast Pat<'ast>) -> Result<hir::Pat<'t>, ResolveError> {
+        let kind = match pat.kind {
+            PatKind::Wild => hir::PatKind::Wild,
+            PatKind::Lit(l) => hir::PatKind::Lit(wf_lit(l, pat.span)?),
+            PatKind::Var(id) => hir::PatKind::Var(self.make_local(id)),
             PatKind::Ann(p, t) => {
-                self.resolve_pat(p)?;
+                let p = self.resolve_pat(p)?;
                 let ty = self.lower_type(t)?;
-                self.res.annotations.insert(pat.ast_id, ty);
-                Ok(())
+                hir::PatKind::Ann(Box::new(p), Sp::new(ty, t.span))
             }
-            PatKind::Tuple(ps) => self.resolve_pats(ps),
+            PatKind::Tuple(ps) => hir::PatKind::Tuple(self.resolve_pats(ps)?),
             PatKind::Cons(cons, ps) => {
-                self.resolve_path(Namespace::Value, cons)?;
-                self.resolve_pats(ps)
+                let var = self.resolve_path(Namespace::Cons, cons)?;
+                hir::PatKind::Cons(var, self.resolve_pats(ps)?)
             }
-            PatKind::Or(ps) => self.resolve_pats(ps),
-        }
+            PatKind::Or(ps) => hir::PatKind::Or(self.resolve_pats(ps)?),
+        };
+        Ok(hir::Pat::new(kind, pat.span))
     }
 
-    fn resolve_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<(), ResolveError> {
+    fn resolve_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<Vec<hir::Pat<'t>>, ResolveError> {
+        let mut new_pats = Vec::with_capacity(pats.len());
         for pat in pats {
-            self.resolve_pat(pat)?;
+            new_pats.push(self.resolve_pat(pat)?);
         }
-        Ok(())
+        Ok(new_pats)
     }
 
-    fn resolve_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<(), ResolveError> {
-        match expr.kind {
-            ExprKind::External(_) => Ok(()),
-            ExprKind::Lit(l) => wf_lit(l, expr.span),
-            ExprKind::Path(p) | ExprKind::Cons(p) => {
-                let _ = self.resolve_path(Namespace::Value, p)?;
-                Ok(())
+    fn resolve_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<hir::Expr<'t>, ResolveError> {
+        let kind = match expr.kind {
+            ExprKind::Lit(l) => hir::ExprKind::Lit(wf_lit(l, expr.span)?),
+            ExprKind::Path(p) => {
+                let var = self.resolve_path(Namespace::Value, p)?;
+                hir::ExprKind::Var(var)
+            }
+            ExprKind::Cons(p) => {
+                let var = self.resolve_path(Namespace::Cons, p)?;
+                hir::ExprKind::Var(var)
             }
             ExprKind::Lambda(l) => {
                 self.check_duplicates_many(l.args)?;
                 self.with_local_scope(|self_| {
-                    self_.resolve_pats(l.args)?;
-                    self_.resolve_expr(l.body)
-                })
+                    let args = self_.resolve_pats(l.args)?;
+                    let body = self_.resolve_expr(l.body)?;
+                    Ok(hir::ExprKind::Lambda(hir::Lambda {
+                        args,
+                        body: Box::new(body),
+                    }))
+                })?
             }
             ExprKind::Let(binds, body) => self.with_local_scope(|self_| {
+                let mut new_binds = Vec::with_capacity(binds.len());
                 for bind in binds.iter() {
                     self_.check_duplicates(&bind.0)?;
-                    self_.resolve_pat(&bind.0)?;
-                    self_.resolve_expr(&bind.1)?;
+                    let pat = self_.resolve_pat(&bind.0)?;
+                    let expr = self_.resolve_expr(&bind.1)?;
+                    new_binds.push((pat, expr));
                 }
-                self_.resolve_expr(body)
-            }),
+                let new_body = self_.resolve_expr(body)?;
+                Ok(hir::ExprKind::Let(new_binds, Box::new(new_body)))
+            })?,
             ExprKind::Case(e, arms) => {
-                self.resolve_expr(e)?;
+                let new_e = self.resolve_expr(e)?;
+                let mut new_arms = Vec::with_capacity(arms.len());
                 for arm in arms.iter() {
                     self.check_duplicates(&arm.0)?;
                     self.with_local_scope(|self_| {
-                        self_.resolve_pat(&arm.0)?;
-                        self_.resolve_expr(&arm.1)
+                        let pat = self_.resolve_pat(&arm.0)?;
+                        let expr = self_.resolve_expr(&arm.1)?;
+                        new_arms.push((pat, expr));
+                        Ok(())
                     })?;
                 }
-                Ok(())
+                hir::ExprKind::Case(Box::new(new_e), new_arms)
             }
             ExprKind::If(cond, e1, e2) => {
-                self.resolve_expr(cond)?;
-                self.with_local_scope(|self_| self_.resolve_expr(e1))?;
-                self.with_local_scope(|self_| self_.resolve_expr(e2))
+                let new_cond = self.resolve_expr(cond)?;
+                let new_e1 = self.with_local_scope(|self_| self_.resolve_expr(e1))?;
+                let new_e2 = self.with_local_scope(|self_| self_.resolve_expr(e2))?;
+                hir::ExprKind::If(Box::new(new_cond), Box::new(new_e1), Box::new(new_e2))
             }
             ExprKind::Ann(e, t) => {
-                self.resolve_expr(e)?;
+                let new_e = self.resolve_expr(e)?;
                 let ty = self.lower_type(t)?;
-                self.res.annotations.insert(expr.ast_id, ty);
-                Ok(())
+                hir::ExprKind::Ann(Box::new(new_e), Sp::new(ty, t.span))
             }
-            ExprKind::Call(head, es) => {
-                self.resolve_expr(head)?;
-                for e in es.iter() {
-                    self.resolve_expr(e)?;
-                }
-                Ok(())
+            ExprKind::Call(head, args) => {
+                let new_head = self.resolve_expr(head)?;
+                let new_args = self.resolve_exprs(args)?;
+                hir::ExprKind::Call(Box::new(new_head), new_args)
             }
-            ExprKind::Tuple(es) | ExprKind::Vector(es) => {
-                for e in es.iter() {
-                    self.resolve_expr(e)?;
-                }
-                Ok(())
+            ExprKind::Tuple(es) => {
+                let new_es = self.resolve_exprs(es)?;
+                hir::ExprKind::Tuple(new_es)
+            }
+            ExprKind::Vector(es) => {
+                let new_es = self.resolve_exprs(es)?;
+                hir::ExprKind::Vector(new_es)
             }
             ExprKind::Seq(e1, e2) => {
-                self.resolve_expr(e1)?;
-                self.resolve_expr(e2)
+                let new_e1 = self.resolve_expr(e1)?;
+                let new_e2 = self.resolve_expr(e2)?;
+                hir::ExprKind::Seq(Box::new(new_e1), Box::new(new_e2))
             }
+        };
+        Ok(hir::Expr::new(kind, expr.span))
+    }
+
+    fn resolve_exprs(
+        &mut self,
+        exprs: &'ast [Expr<'ast>],
+    ) -> Result<Vec<hir::Expr<'t>>, ResolveError> {
+        let mut new_exprs = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            new_exprs.push(self.resolve_expr(expr)?);
         }
+        Ok(new_exprs)
     }
 }
 
-fn wf_lit(lit: Lit, span: Span) -> Result<(), ResolveError> {
+fn wf_lit(lit: Lit, span: Span) -> Result<Lit, ResolveError> {
     if let Lit::Int32(n) = lit {
         #[allow(clippy::from_str_radix_10)]
         if let Err(e) = i32::from_str_radix(&n.as_str().replace("_", ""), 10) {
             return Err(ResolveError::InvalidInt(span, e));
         }
     }
-    Ok(())
+    Ok(lit)
 }
 
 #[derive(Default)]
@@ -849,70 +886,4 @@ impl Seen {
         self.spans[ns].insert(id.sym, id.span);
         Ok(())
     }
-}
-
-fn verify_resolved<'ast, 't>(program: &'ast Program<'ast>, res: &'t Resolution<'t>) {
-    struct Verifier<'t> {
-        res: &'t Resolution<'t>,
-    }
-
-    impl<'ast> AstVisitor<'ast> for Verifier<'_> {
-        // FIXME Needing this makes me want to reconsider a separate type for a resolved AST.
-        // Perhaps AST<A>, where A = () in parse and A = Res after resolve.
-        // This annotated AST would require the compiler to rebuild the AST, but avoids
-        // the problem of needing to programmatically maintain side tables with invariants.
-        fn visit_expr(&mut self, expr: &'ast Expr<'ast>) {
-            match expr.kind {
-                ExprKind::Path(path) => {
-                    let res = self.res.res.get(&path.ast_id);
-                    assert!(res.is_some(), "{:?} not resolved", expr);
-                    let res = res.unwrap();
-                    match res {
-                        Res::Def(DefKind::Value, _) => {
-                            let value = self.res.values.get(&res.res_id());
-                            assert!(value.is_some(), "{:?} does not have a resolved value", expr);
-                        }
-                        Res::Local(_) => (),
-                        _ => panic!("{:?} resolved to {res}", expr),
-                    }
-                }
-                ExprKind::Cons(path) => {
-                    let res = self.res.res.get(&path.ast_id);
-                    assert!(res.is_some(), "{:?} not resolved", expr);
-                    let res = res.unwrap();
-                    assert!(
-                        matches!(res, Res::Def(DefKind::Value, _)), // FIXME make Cons
-                        "{:?} resolved to {res}",
-                        expr,
-                    );
-                    let cons = self.res.constructors.get(&res.res_id());
-                    assert!(cons.is_some());
-                }
-                _ => expr.visit_with(self),
-            }
-        }
-
-        fn visit_pat(&mut self, pat: &'ast Pat<'ast>) {
-            match pat.kind {
-                PatKind::Var(id) => {
-                    let res = self.res.res.get(&id.ast_id);
-                    assert!(matches!(res, Some(Res::Local(_))), "{:?} not resolved", pat);
-                }
-                PatKind::Cons(path, pats) => {
-                    let res = self.res.res.get(&path.ast_id);
-                    assert!(res.is_some(), "{:?} not resolved", pat);
-                    let res = res.unwrap();
-                    let cons = self.res.constructors.get(&res.res_id());
-                    assert!(cons.is_some());
-
-                    for pat in pats {
-                        self.visit_pat(pat);
-                    }
-                }
-                _ => pat.visit_with(self),
-            }
-        }
-    }
-
-    Verifier { res }.visit_program(program);
 }

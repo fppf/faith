@@ -9,4 +9,4 @@ base = { path = "../base" }
 span = { path = "../span" }
 syntax = { path = "../syntax" }
 infer = { path = "../infer" }
-mir = { path = "../mir" }
+#mir = { path = "../mir" }

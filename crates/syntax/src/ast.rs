@@ -128,6 +128,7 @@ pub enum TypeDeclKind<'ast> {
 pub enum Item<'ast> {
     Type(&'ast [TypeDecl<'ast>]),
     Value(Id, Option<&'ast Sp<Type<'ast>>>, &'ast Expr<'ast>),
+    External(Id, &'ast Sp<Type<'ast>>, Ident),
     Mod(Id, &'ast Sp<ModExpr<'ast>>),
 }
 
@@ -155,7 +156,6 @@ impl<'ast> Expr<'ast> {
 pub enum ExprKind<'ast> {
     Path(Path<'ast>),
     Cons(Path<'ast>),
-    External(Ident),
     Lit(Lit),
     Ann(&'ast Expr<'ast>, &'ast Sp<Type<'ast>>),
     Tuple(&'ast [Expr<'ast>]),
@@ -235,6 +235,7 @@ pub trait AstVisitor<'ast>: Sized {
     fn visit_item(&mut self, item: &'ast Item<'ast>) {
         match item {
             Item::Type(..) => (),
+            Item::External(..) => (),
             Item::Value(_, _, expr) => self.visit_expr(expr),
             Item::Mod(_, mod_expr) => self.visit_mod_expr(mod_expr),
         }
@@ -267,7 +268,7 @@ impl<'ast> Expr<'ast> {
         V: AstVisitor<'ast>,
     {
         match self.kind {
-            ExprKind::Path(_) | ExprKind::Cons(_) | ExprKind::External(_) | ExprKind::Lit(_) => (),
+            ExprKind::Path(_) | ExprKind::Cons(_) | ExprKind::Lit(_) => (),
             ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) | ExprKind::Vector(exprs) => {
                 exprs.iter().for_each(|expr| v.visit_expr(expr))

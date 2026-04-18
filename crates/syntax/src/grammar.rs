@@ -990,11 +990,7 @@ fn struct_item_external<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>
     p.expect(EQUAL)?;
     let s = lit_str(p)?;
     Ok(Sp::new(
-        Item::Value(
-            Id::new(ident, p.next_ast_id()),
-            Some(alloc!(p, t)),
-            alloc!(p, Expr::new(ExprKind::External(s), s.span, p.next_ast_id())),
-        ),
+        Item::External(Id::new(ident, p.next_ast_id()), alloc!(p, t), s),
         p.end(m),
     ))
 }

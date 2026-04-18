@@ -52,16 +52,17 @@ fn run_passes(
         return Ok(());
     }
 
-    let ctxt = infer::ty::TyCtxt::default();
-    let (res, env) = infer::infer_program_in(&ctxt, program)?;
+    let ty_arena = infer::ty::Arena::default();
+    let ctxt = infer::ty::TyCtxt::new(&ty_arena);
+    let hir = infer::infer_program_in(&ctxt, program)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
 
-    let mir = mir::lower(&syntax_arena, program, res, env);
-    let doc_arena = DocArena::default();
-    println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
+    //let mir = mir::lower(&syntax_arena, program, res, env);
+    //let doc_arena = DocArena::default();
+    //println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
 
     Ok(())
 }

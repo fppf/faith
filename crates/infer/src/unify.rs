@@ -54,19 +54,7 @@ impl<'t> Unifier<'_, '_, 't> {
                     self.unify(l_ret, r_ret)
                 }
                 (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
-                    let l_h = self
-                        .infer
-                        .res
-                        .types
-                        .get(&l_h.res_id())
-                        .expect("ICE: resolve");
-                    let r_h = self
-                        .infer
-                        .res
-                        .types
-                        .get(&r_h.res_id())
-                        .expect("ICE: resolve");
-                    self.unify(*l_h, *r_h)?;
+                    self.unify(l_h, r_h)?;
                     self.zip_unify(l_args, r_args)
                 }
                 (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
