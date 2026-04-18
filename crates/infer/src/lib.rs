@@ -219,12 +219,13 @@ impl<'a, 't> Infer<'a, 't> {
         for item in items.iter_mut() {
             match item {
                 Item::Expr {
+                    var,
                     recursive,
                     expr,
                     expected_typ,
                     typ,
                 } => {
-                    log::trace!("[infer item] recursive={recursive}, expr={expr:?}");
+                    log::trace!("[infer item] {var} recursive={recursive}, expr={expr:?}");
                     assert!(typ.is_none());
                     let ty = if *recursive {
                         // FIXME
@@ -491,6 +492,10 @@ impl Res {
         match *self {
             Res::Def(_, res_id) | Res::Local(res_id) => res_id,
         }
+    }
+
+    pub fn dummy() -> Self {
+        Res::Local(ResId::ZERO)
     }
 }
 

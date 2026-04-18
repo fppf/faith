@@ -8,5 +8,4 @@ authors = ["ryn <ryn@fppf.site>"]
 base = { path = "../base" }
 span = { path = "../span" }
 log = { path = "../log" }
-syntax = { path = "../syntax" }
 infer = { path = "../infer" }

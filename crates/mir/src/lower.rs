@@ -1,52 +1,54 @@
 use std::collections::VecDeque;
 
 use base::{hash::Map, index::Idx};
-use infer::{Environment, Res, ResId, Resolution, ty::Ty};
+use infer::{
+    Res, ResId, hir,
+    ty::{Ty, TyCtxt},
+};
 use span::{Ident, Sp, Span, Sym};
-use syntax::ast::{self, AstId, ExprKind, Item, PatKind};
 
 use crate::{Func, Join, JoinId, Value, Var, mir};
 
-pub fn lower<'ast, 't>(
-    syntax_arena: &'ast syntax::Arena<'ast>,
-    program: &'ast ast::Program<'ast>,
-    resolution: &'t Resolution<'t>,
-    environment: &'t Environment<'t>,
-) -> mir::Program {
-    LoweringContext::new(syntax_arena, program, resolution, environment).lower()
+pub fn lower<'a, 't>(ctxt: &'t TyCtxt<'t>, program: &'a hir::Program<'t>) -> mir::Program {
+    LoweringContext::new(ctxt, program).lower()
 }
 
-pub(crate) struct LoweringContext<'ast, 't> {
+pub(crate) struct LoweringContext<'a, 't> {
+    ctxt: &'t TyCtxt<'t>,
+    program: &'a hir::Program<'t>,
     funcs: Vec<mir::Func>,
-    res_to_var: Map<ResId, Var>,
-    var_to_res: Map<Var, ResId>,
+    res_to_var: Map<Res, Var>,
+    var_to_res: Map<Var, Res>,
     temporaries: Map<Ident, Var>,
     stamp: u32,
-    program: &'ast ast::Program<'ast>,
-    syntax_arena: &'ast syntax::Arena<'ast>,
-    resolution: &'t Resolution<'t>,
-    environment: &'t Environment<'t>,
 }
 
-enum Ctx<'ast> {
+enum Ctx<'a, 't> {
     Ret,
     Jump(JoinId),
-    If(&'ast ast::Expr<'ast>, &'ast ast::Expr<'ast>, Box<Ctx<'ast>>),
-    Case(&'ast [(ast::Pat<'ast>, ast::Expr<'ast>)], Box<Ctx<'ast>>),
+    If(&'a hir::Expr<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
+    Case(&'a [(hir::Pat<'t>, hir::Expr<'t>)], Box<Ctx<'a, 't>>),
     List(
         ListKind,
-        &'ast [ast::Expr<'ast>],
+        &'a [hir::Expr<'t>],
         usize,
-        Vec<Value>,
-        Box<Ctx<'ast>>,
+        Vec<mir::Value>,
+        Box<Ctx<'a, 't>>,
     ),
     Let(
-        &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)],
+        &'a [(hir::Pat<'t>, hir::Expr<'t>)],
         usize,
-        &'ast ast::Expr<'ast>,
-        Box<Ctx<'ast>>,
+        &'a hir::Expr<'t>,
+        Box<Ctx<'a, 't>>,
     ),
-    Seq(&'ast ast::Expr<'ast>, Box<Ctx<'ast>>),
+    Lambda(
+        &'a [hir::Pat<'t>],
+        Vec<(usize, hir::Var<'t>)>,
+        usize,
+        &'a hir::Expr<'t>,
+        Box<Ctx<'a, 't>>,
+    ),
+    Seq(&'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
 }
 
 enum ListKind {
@@ -55,23 +57,16 @@ enum ListKind {
     Vector,
 }
 
-impl<'ast, 't> LoweringContext<'ast, 't> {
-    fn new(
-        syntax_arena: &'ast syntax::Arena<'ast>,
-        program: &'ast ast::Program<'ast>,
-        resolution: &'t Resolution<'t>,
-        environment: &'t Environment<'t>,
-    ) -> Self {
+impl<'a, 't> LoweringContext<'a, 't> {
+    fn new(ctxt: &'t TyCtxt<'t>, program: &'a hir::Program<'t>) -> Self {
         Self {
+            ctxt,
+            program,
             funcs: Vec::new(),
             res_to_var: Map::default(),
             var_to_res: Map::default(),
             temporaries: Map::default(),
             stamp: 1,
-            program,
-            syntax_arena,
-            resolution,
-            environment,
         }
     }
 
@@ -81,140 +76,127 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         stamp
     }
 
-    fn get_or_insert_var(&mut self, id: ast::Id) -> Var {
-        let res_id = self.resolution[id.ast_id].res_id();
-        match self.res_to_var.get(&res_id) {
+    fn get_or_insert_var(&mut self, var: hir::Var<'t>) -> mir::Var {
+        let res = var.res;
+        match self.res_to_var.get(&res) {
             Some(var) => *var,
             None => {
-                let var = Var::new(id.ident.sym, self.next_stamp());
-                self.res_to_var.insert(res_id, var);
-                self.var_to_res.insert(var, res_id);
+                let var = mir::Var::new(var.id.sym, self.next_stamp());
+                self.res_to_var.insert(res, var);
+                self.var_to_res.insert(var, res);
                 var
             }
         }
     }
 
-    pub fn get_var(&self, path: ast::Path<'ast>) -> Var {
-        if path.ast_id == AstId::ZERO {
-            let id = path.as_ident().unwrap();
-            return self.temporaries[&id.ident];
+    pub fn get_var(&self, var: hir::Var<'t>) -> mir::Var {
+        if var.res == Res::dummy() {
+            return self.temporaries[&var.id];
         }
-        let res = self.resolution[path.ast_id];
-        self.res_to_var[&res.res_id()]
+        *self
+            .res_to_var
+            .get(&var.res)
+            .unwrap_or_else(|| panic!("res_to_var missing {var}"))
     }
 
-    pub fn insert_var(&mut self, name: &str) -> (ast::Expr<'ast>, Var) {
-        let var = Var::new(Sym::intern(&format!("~{name}")), self.next_stamp());
-        let id = Ident::new(var.sym, Span::dummy());
-        self.temporaries.insert(id, var);
-        let expr = ast::Expr::new(
-            ast::ExprKind::Path(ast::Path::new(id, &[], Span::dummy(), AstId::ZERO)),
-            Span::dummy(),
-            AstId::ZERO,
-        );
-        (expr, var)
+    pub fn insert_var(&mut self, name: &str) -> (hir::Var<'t>, mir::Var) {
+        let mir_var = mir::Var::new(Sym::intern(&format!("~{name}")), self.next_stamp());
+        let id = Ident::new(mir_var.sym, Span::dummy());
+        let hir_var = hir::Var::new(id, Res::dummy(), id.span);
+        self.temporaries.insert(id, mir_var);
+        let expr = hir::Expr::new(hir::ExprKind::Var(hir_var), Span::dummy());
+        (hir_var, mir_var)
     }
 
     fn lower(mut self) -> mir::Program {
-        for (res_id, ctor) in &self.resolution.constructors {
-            self.get_or_insert_var(ctor.id);
+        for adt in self.ctxt.adts.borrow().values() {
+            for cons in adt.constructors.values() {
+                self.get_or_insert_var(cons.var);
+            }
         }
-        self.lower_comp_unit(self.program.unit);
-        let main = self.lower_expr(self.program.main);
+        for import in self.program.imports.values() {
+            self.lower_comp_unit(import);
+        }
+        self.lower_comp_unit(&self.program.unit);
+        let main = self.lower_expr(&self.program.main);
         mir::Program {
             funcs: self.funcs,
             main,
         }
     }
 
-    fn lower_comp_unit(&mut self, unit: &'ast ast::CompUnit<'ast>) {
-        self.lower_items(unit.items);
+    fn lower_comp_unit(&mut self, unit: &'a hir::CompUnit<'t>) {
+        self.lower_items(&unit.items);
     }
 
-    fn lower_mod_expr(&mut self, mexpr: &'ast Sp<ast::ModExpr<'ast>>) {
-        match mexpr.value {
-            ast::ModExpr::Path(_) => todo!(),
-            ast::ModExpr::Import(source_id) => {
-                let unit = self
-                    .program
-                    .imports
-                    .get(&source_id)
-                    .expect("invalid import");
-                self.lower_comp_unit(unit);
-            }
-            ast::ModExpr::Struct(items) => self.lower_items(items),
-        }
-    }
-
-    fn lower_items(&mut self, items: &'ast [Sp<Item<'ast>>]) {
+    fn lower_items(&mut self, items: &'a [hir::Item<'t>]) {
         for item in items {
-            match item.value {
-                Item::Type(..) => (),
-                Item::Value(id, _, expr) => {
-                    let var = self.get_or_insert_var(id);
+            match item {
+                hir::Item::Expr {
+                    var,
+                    expr,
+                    recursive,
+                    ..
+                } => {
+                    let name = self.get_or_insert_var(*var);
                     let body = self.lower_expr(expr);
-                    let res = self.resolution[id.ast_id];
-                    let value = self.resolution.values[&res.res_id()];
                     let func = mir::Func {
-                        name: var,
+                        name,
                         args: vec![],
                         body: Box::new(body),
-                        recursive: value.recursive,
+                        recursive: *recursive,
                     };
                     self.funcs.push(func);
                 }
-                Item::Mod(_, mexpr) => self.lower_mod_expr(mexpr),
             }
         }
     }
 
-    fn lower_lit(&self, lit: ast::Lit) -> mir::Lit {
+    fn lower_lit(&self, lit: hir::Lit) -> mir::Lit {
         match lit {
-            ast::Lit::Unit => mir::Lit::Unit,
-            ast::Lit::Bool(b) => mir::Lit::Bool(b),
-            ast::Lit::Int32(s) =>
+            hir::Lit::Unit => mir::Lit::Unit,
+            hir::Lit::Bool(b) => mir::Lit::Bool(b),
+            hir::Lit::Int32(s) =>
             {
                 #[allow(clippy::from_str_radix_10)]
                 mir::Lit::Int32(i32::from_str_radix(&s.as_str().replace("_", ""), 10).unwrap())
             }
-            ast::Lit::Str(s) => mir::Lit::Str(s),
+            hir::Lit::Str(s) => mir::Lit::Str(s),
         }
     }
 
-    fn lower_expr(&mut self, expr: &'ast ast::Expr<'ast>) -> mir::Expr {
+    fn lower_expr(&mut self, expr: &'a hir::Expr<'t>) -> mir::Expr {
         self.lower_expr_ctx(expr, Ctx::Ret)
     }
 
-    fn lower_expr_ctx(&mut self, expr: &'ast ast::Expr<'ast>, ctx: Ctx<'ast>) -> mir::Expr {
-        match expr.kind {
-            ExprKind::Path(path) => {
-                let var = self.get_var(path);
-                self.lower_expr_ret(Value::Var(var), ctx)
-            }
-            ExprKind::Cons(path) => {
-                let var = self.get_var(path);
-                self.lower_expr_ret(Value::Var(var), ctx)
-            }
-            ExprKind::External(s) => self.lower_expr_ret(Value::External(s.sym), ctx),
+    fn lower_var_ctx(&mut self, var: hir::Var<'t>, ctx: Ctx<'a, 't>) -> mir::Expr {
+        let var = self.get_var(var);
+        self.lower_expr_ret(Value::Var(var), ctx)
+    }
+
+    fn lower_expr_ctx(&mut self, expr: &'a hir::Expr<'t>, ctx: Ctx<'a, 't>) -> mir::Expr {
+        use hir::ExprKind;
+        match &expr.kind {
+            ExprKind::Var(var) => self.lower_var_ctx(*var, ctx),
             ExprKind::Lit(lit) => {
-                let lit = self.lower_lit(lit);
+                let lit = self.lower_lit(*lit);
                 self.lower_expr_ret(Value::Lit(lit), ctx)
             }
             ExprKind::Ann(e, _) => self.lower_expr_ctx(e, ctx),
             ExprKind::If(cond, e1, e2) => self.lower_expr_ctx(cond, Ctx::If(e1, e2, Box::new(ctx))),
-            ExprKind::Case(e, arms) => self.lower_expr_ctx(e, Ctx::Case(arms, Box::new(ctx))),
+            ExprKind::Case(e, arms) => self.lower_expr_ctx(e, Ctx::Case(&arms, Box::new(ctx))),
             ExprKind::Tuple(es) => {
                 assert!(!es.is_empty());
                 self.lower_expr_ctx(
                     &es[0],
-                    Ctx::List(ListKind::Tuple, es, 1, Vec::new(), Box::new(ctx)),
+                    Ctx::List(ListKind::Tuple, &es, 1, Vec::new(), Box::new(ctx)),
                 )
             }
             ExprKind::Vector(es) => {
                 if !es.is_empty() {
                     self.lower_expr_ctx(
                         &es[0],
-                        Ctx::List(ListKind::Vector, es, 1, Vec::new(), Box::new(ctx)),
+                        Ctx::List(ListKind::Vector, &es, 1, Vec::new(), Box::new(ctx)),
                     )
                 } else {
                     self.lower_expr_ret(Value::Lit(mir::Lit::EmptyVector), ctx)
@@ -222,28 +204,26 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
             }
             ExprKind::Call(f, args) => self.lower_expr_ctx(
                 f,
-                Ctx::List(ListKind::Call, args, 0, Vec::new(), Box::new(ctx)),
+                Ctx::List(ListKind::Call, &args, 0, Vec::new(), Box::new(ctx)),
             ),
             ExprKind::Lambda(lambda) => {
                 let (_, func_var) = self.insert_var("f");
                 let mut args = Vec::with_capacity(lambda.args.len());
                 let mut binds = Vec::new();
-                for &arg in lambda.args {
-                    let var = self.acc_lambda_binds(arg, &mut binds);
+                for (i, arg) in lambda.args.iter().enumerate() {
+                    let var = self.acc_lambda_binds(i, arg, &mut binds);
                     args.push(var);
                 }
+                // \p1 .. pn -> e ~>
+                //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
                 let body = if binds.is_empty() {
-                    lambda.body
+                    self.lower_expr(&lambda.body)
                 } else {
-                    // \p1 .. pn -> e ~>
-                    //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
-                    self.syntax_arena.alloc(ast::Expr::new(
-                        ast::ExprKind::Let(self.syntax_arena.alloc_from_iter(binds), lambda.body),
-                        lambda.body.span,
-                        AstId::ZERO,
-                    ))
+                    self.lower_var_ctx(
+                        binds[0].1,
+                        Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
+                    )
                 };
-                let body = self.lower_expr(body);
                 let func = mir::Func {
                     name: func_var,
                     args,
@@ -259,24 +239,26 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 assert!(!binds.is_empty());
                 self.lower_expr_ctx(&binds[0].1, Ctx::Let(binds, 1, body, Box::new(ctx)))
             }
-            ExprKind::Seq(e1, e2) => self.lower_expr_ctx(e1, Ctx::Seq(e2, Box::new(ctx))),
+            ExprKind::Seq(e1, e2) => self.lower_expr_ctx(&e1, Ctx::Seq(&e2, Box::new(ctx))),
         }
     }
 
     fn acc_lambda_binds(
         &mut self,
-        pat: ast::Pat<'ast>,
-        binds: &mut Vec<(ast::Pat<'ast>, ast::Expr<'ast>)>,
-    ) -> Var {
-        match pat.kind {
+        idx: usize,
+        pat: &'a hir::Pat<'t>,
+        binds: &mut Vec<(usize, hir::Var<'t>)>,
+    ) -> mir::Var {
+        use hir::PatKind;
+        match &pat.kind {
             PatKind::Wild => self.insert_var("w").1,
-            PatKind::Var(id) => self.get_or_insert_var(id),
+            PatKind::Var(v) => self.get_or_insert_var(*v),
             PatKind::Tuple(_) => {
                 let (temp, var) = self.insert_var("tup");
-                binds.push((pat, temp));
+                binds.push((idx, temp));
                 var
             }
-            PatKind::Ann(p, _) => self.acc_lambda_binds(*p, binds),
+            PatKind::Ann(p, _) => self.acc_lambda_binds(idx, p, binds),
             PatKind::Lit(_) => panic!("literal pattern as lambda argument"),
             PatKind::Or(_) => panic!("or pattern as lambda argument"),
             PatKind::Cons(..) => {
@@ -285,7 +267,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
         }
     }
 
-    fn lower_expr_ret(&mut self, value: Value, mut ctx: Ctx<'ast>) -> mir::Expr {
+    fn lower_expr_ret(&mut self, value: Value, mut ctx: Ctx<'a, 't>) -> mir::Expr {
         match ctx {
             Ctx::Ret => mir::Expr::new(mir::ExprKind::Return(value)),
             Ctx::Jump(join_id) => mir::Expr::new(mir::ExprKind::Jump(join_id, vec![value])),
@@ -320,9 +302,9 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 };
                 let mut lowered_arms = Vec::new();
                 for (pat, expr) in arms {
-                    let pat: mir::Pat = todo!("need to do pattern compilation");
-                    let expr = self.lower_expr_ctx(expr, Ctx::Jump(join_id));
-                    lowered_arms.push((pat, expr));
+                    //let pat = todo!();
+                    //let expr = self.lower_expr_ctx(expr, Ctx::Jump(join_id));
+                    //lowered_arms.push((pat, expr));
                 }
                 mir::Expr::new(mir::ExprKind::LetJoin {
                     join,
@@ -365,7 +347,7 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                 let (pat, expr) = &binds[index - 1];
                 let (_, mut tmp) = self.insert_var("t");
                 let lowered_binds = match pat.kind {
-                    ast::PatKind::Var(id) => {
+                    hir::PatKind::Var(id) => {
                         tmp = self.get_or_insert_var(id);
                         Vec::new()
                     }
@@ -400,6 +382,47 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
                     body: Box::new(body),
                 })
             }
+            Ctx::Lambda(args, binds, index, body, ctx) => {
+                let (i, var) = &binds[index - 1];
+                let pat = &args[*i];
+                let (_, mut tmp) = self.insert_var("t");
+                let lowered_binds = match pat.kind {
+                    hir::PatKind::Var(id) => {
+                        tmp = self.get_or_insert_var(id);
+                        Vec::new()
+                    }
+                    _ => self.lower_bind(pat, 0, tmp),
+                };
+                let body = if index == binds.len() {
+                    self.lower_expr_ctx(body, *ctx)
+                } else {
+                    self.lower_var_ctx(*var, Ctx::Lambda(args, binds, index + 1, body, ctx))
+                };
+                let body = if lowered_binds.is_empty() {
+                    body
+                } else {
+                    lowered_binds
+                        .into_iter()
+                        .rev()
+                        .fold(body, |acc, (lhs, rhs, i)| {
+                            mir::Expr::new(mir::ExprKind::Let {
+                                lhs,
+                                rhs: if i > 0 {
+                                    mir::Rhs::Proj(rhs, i - 1)
+                                } else {
+                                    mir::Rhs::Value(Value::Var(rhs))
+                                },
+                                body: Box::new(acc),
+                            })
+                        })
+                };
+                mir::Expr::new(mir::ExprKind::Let {
+                    lhs: tmp,
+                    rhs: mir::Rhs::Value(value),
+                    body: Box::new(body),
+                })
+            }
+
             Ctx::Seq(e2, ctx) => {
                 let (_, unused) = self.insert_var("seq");
                 let e2 = self.lower_expr_ctx(e2, *ctx);
@@ -414,18 +437,19 @@ impl<'ast, 't> LoweringContext<'ast, 't> {
 
     fn lower_bind(
         &mut self,
-        pat: &'ast ast::Pat<'ast>,
+        pat: &'a hir::Pat<'t>,
         index: usize,
         var: Var,
     ) -> Vec<(Var, Var, usize)> {
-        match pat.kind {
+        use hir::PatKind;
+        match &pat.kind {
             PatKind::Lit(_) => panic!("literal pattern as LHS of bind"),
             PatKind::Wild => {
                 let (_, unused) = self.insert_var("w");
                 vec![(unused, var, index)]
             }
-            PatKind::Var(id) => {
-                vec![(self.get_or_insert_var(id), var, index)]
+            PatKind::Var(v) => {
+                vec![(self.get_or_insert_var(*v), var, index)]
             }
             PatKind::Ann(p, _) => self.lower_bind(p, index, var),
             PatKind::Tuple(ps) => {

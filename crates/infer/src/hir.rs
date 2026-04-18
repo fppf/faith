@@ -1,8 +1,12 @@
-use std::fmt;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 use base::hash::Map;
 use span::{Ident, SourceId, Sp, Span, Sym};
-use syntax::ast::Lit;
+
+pub use syntax::ast::Lit;
 
 use crate::{Res, ty::Ty};
 
@@ -35,11 +39,18 @@ impl<'t> PartialEq for Var<'t> {
 
 impl<'t> Eq for Var<'t> {}
 
+impl<'t> Hash for Var<'t> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.res.hash(state);
+    }
+}
+
 impl<'t> fmt::Display for Var<'t> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}~{}", self.id, self.res)?;
         if let Some(ty) = self.typ {
-            write!(f, ": {ty}")?;
+            write!(f, ":{ty}")?;
         }
         Ok(())
     }
@@ -63,6 +74,7 @@ pub struct CompUnit<'t> {
 #[derive(Clone, Debug)]
 pub enum Item<'t> {
     Expr {
+        var: Var<'t>,
         recursive: bool,
         expr: Expr<'t>,
         expected_typ: Option<Sp<Ty<'t>>>,

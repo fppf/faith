@@ -1,8 +1,7 @@
 use base::hash::Map;
 use span::Ident;
-use syntax::ast::{self, ExprKind};
 
-use crate::{Var, lower::LoweringContext};
+use crate::{Var, hir::*, ty::TyCtxt};
 
 // The pattern match compilation algorithm is due to Jules Jacobs
 // <https://julesjacobs.com/notes/patternmatching/patternmatching.pdf>
@@ -89,17 +88,17 @@ use crate::{Var, lower::LoweringContext};
 //   - https://github.com/SomewhatML/match-compile/
 
 #[derive(Clone, Debug)]
-pub enum DecisionTree {
+pub enum DecisionTree<'t> {
     Fail,
     Leaf(usize),
-    Switch(Var, Vec<Case>, Option<Box<DecisionTree>>),
+    Switch(Var<'t>, Vec<Case<'t>>, Option<Box<DecisionTree<'t>>>),
 }
 
 #[derive(Clone, Debug)]
-pub struct Case {
+pub struct Case<'t> {
     constructor: Constructor,
     variables: Vec<Ident>,
-    tree: DecisionTree,
+    tree: DecisionTree<'t>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,25 +109,25 @@ pub enum Constructor {
 }
 
 #[derive(Default)]
-struct Matrix<'ast> {
-    clauses: Vec<Clause<'ast>>,
+struct Matrix<'a, 't> {
+    clauses: Vec<Clause<'a, 't>>,
 }
 
 // A list of tests and the corresponding action.
-struct Clause<'ast> {
-    tests: Vec<Test<'ast>>,
+struct Clause<'a, 't> {
+    tests: Vec<Test<'a, 't>>,
     body: Body,
 }
 
 // Test a variable against a pattern (id is pat).
-struct Test<'ast> {
-    id: Ident,
-    pat: &'ast ast::Pat<'ast>,
+struct Test<'a, 't> {
+    var: Var<'t>,
+    pat: &'a Pat<'t>,
 }
 
-impl<'ast> Test<'ast> {
-    fn new(id: Ident, pat: &'ast ast::Pat<'ast>) -> Self {
-        Test { id, pat }
+impl<'a, 't> Test<'a, 't> {
+    fn new(var: Var<'t>, pat: &'a Pat<'t>) -> Self {
+        Test { var, pat }
     }
 }
 
@@ -146,15 +145,15 @@ impl Body {
     }
 }
 
-impl<'ast> Matrix<'ast> {
-    fn new_from_case(scrutinee_id: Ident, arms: &'ast [(ast::Pat<'ast>, ast::Expr<'ast>)]) -> Self {
+impl<'a, 't> Matrix<'a, 't> {
+    fn new_from_case(scrutinee: Var<'t>, arms: &'a [(Pat<'t>, Expr<'t>)]) -> Self {
         Self {
             clauses: arms
                 .iter()
                 .enumerate()
-                .map(|(action, (pat, _))| Clause {
-                    tests: vec![Test::new(scrutinee_id, pat)],
-                    body: Body::new(action),
+                .map(|(idx, (pat, _))| Clause {
+                    tests: vec![Test::new(scrutinee, pat)],
+                    body: Body::new(idx),
                 })
                 .collect(),
         }
@@ -164,22 +163,22 @@ impl<'ast> Matrix<'ast> {
         let mut counts = Map::default();
         for clause in &self.clauses {
             for test in &clause.tests {
-                *counts.entry(&test.id).or_insert(0) += 1;
+                *counts.entry(&test.var).or_insert(0) += 1;
             }
         }
         self.clauses
             .first()?
             .tests
             .iter()
-            .map(|test| test.id)
-            .max_by_key(|id| counts[id])
+            .map(|test| test.var)
+            .max_by_key(|var| counts[var])
     }
 
     fn bind_variable_patterns(&mut self) {
         for row in self.clauses.iter_mut() {
             row.tests.retain(|e| {
-                if let ast::PatKind::Var(id) = e.pat.kind {
-                    row.body.bindings.push((id.ident, e.id));
+                if let PatKind::Var(var) = e.pat.kind {
+                    row.body.bindings.push((var.id, e.id));
                     false
                 } else {
                     true
@@ -189,7 +188,11 @@ impl<'ast> Matrix<'ast> {
     }
 }
 
-impl<'ast> LoweringContext<'ast, '_> {
+struct MatchCompiler<'t> {
+    ctxt: &'t TyCtxt<'t>,
+}
+
+impl<'t> MatchCompiler<'t> {
     pub fn match_compile(
         &mut self,
         scrutinee: &'ast ast::Expr<'ast>,
@@ -198,7 +201,7 @@ impl<'ast> LoweringContext<'ast, '_> {
         todo!()
     }
 
-    fn compile(&mut self, matrix: &mut Matrix<'ast>) -> DecisionTree {
+    fn compile<'a>(&mut self, matrix: &mut Matrix<'ast>) -> DecisionTree {
         // If the matrix has no rows, then we vacuously fail.
         if matrix.clauses.is_empty() {
             return DecisionTree::Fail;

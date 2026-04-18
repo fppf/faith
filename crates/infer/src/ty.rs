@@ -7,7 +7,7 @@ use base::{
 };
 use span::Ident;
 
-use crate::Res;
+use crate::{Res, Var};
 
 base::declare_arena!('t, []);
 
@@ -38,8 +38,7 @@ pub struct Adt<'t> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Constructor<'t> {
-    pub id: Ident,
-    pub ty: Ty<'t>,
+    pub var: Var<'t>,
     pub arity: usize,
     pub adt: Res,
 }

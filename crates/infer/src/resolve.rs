@@ -251,7 +251,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
             locals: ScopedMap::default(),
             variables: Map::default(),
             current_module_id,
-            last_res_id: ResId::ZERO,
+            last_res_id: ResId::ZERO + 1,
         }
     }
 
@@ -492,7 +492,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                             let adt_res = decl_var.res;
 
                             // Construct (T 'a1 .. 'ak)
-                            let ty = Ty::app(
+                            let adt_typ = Ty::app(
                                 self.ctxt,
                                 decl_var.typ.unwrap(),
                                 decl.vars
@@ -515,13 +515,14 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                                 // Constructor (Ci ti1 .. tik) is given type
                                 // (ti1 -> .. -> tik -> (T 'a1 .. 'ak))
+                                let cons_typ =
+                                    Ty::n_arrow(self.ctxt, new_args.iter().copied(), adt_typ);
+                                let cons_var = self.make_var(id, cons_res, Some(cons_typ));
                                 let cons = Constructor {
-                                    id: id.ident,
-                                    ty: Ty::n_arrow(self.ctxt, new_args.iter().copied(), ty),
+                                    var: cons_var,
                                     arity: new_args.len(),
                                     adt: adt_res,
                                 };
-                                let _cons_var = self.make_var(id, cons_res, Some(cons.ty));
                                 constructors.insert(cons_res, cons);
 
                                 log::trace!("    {id} => {cons_res}");
@@ -552,7 +553,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 seen.update(Namespace::Value, ident)?;
 
                 let val_res = Res::Def(DefKind::Value, self.new_res_id());
-                let _val_var = self.make_var(id, val_res, None);
+                let val_var = self.make_var(id, val_res, None);
 
                 // Insert res into scope before resolving expr
                 // to allow for recursive functions.
@@ -606,6 +607,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                 log::trace!("{ident} {} => {}", ast_id, val_res);
                 return Ok(vec![hir::Item::Expr {
+                    var: val_var,
                     recursive,
                     expr: new_expr,
                     expected_typ,

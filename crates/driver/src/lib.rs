@@ -60,9 +60,9 @@ fn run_passes(
         return Ok(());
     }
 
-    //let mir = mir::lower(&syntax_arena, program, res, env);
-    //let doc_arena = DocArena::default();
-    //println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
+    let mir = mir::lower(&ctxt, &hir);
+    let doc_arena = DocArena::default();
+    println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
 
     Ok(())
 }
