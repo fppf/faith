@@ -61,7 +61,7 @@ impl<'a, 't> Infer<'a, 't> {
     }
 
     fn infer(mut self, program: &mut Program<'t>) -> Result<(), InferError<'t>> {
-        for (_, import) in &mut program.imports {
+        for import in program.imports.values_mut() {
             self.infer_comp_unit(import)?;
         }
         self.infer_comp_unit(&mut program.unit)?;
@@ -74,18 +74,28 @@ impl<'a, 't> Infer<'a, 't> {
         impl<'a, 't> HirVisitor<'t> for ApplyFinalSubstitution<'a, 't> {
             fn visit_var(&mut self, var: &mut Var<'t>) {
                 assert!(var.typ.is_some(), "variable {var} has no type");
-                var.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+                if let Some(typ) = var.typ.as_mut() {
+                    *typ = self.subs.apply(*typ);
+                } else {
+                    panic!("variable {var} has no type");
+                }
             }
 
             fn visit_expr(&mut self, expr: &mut Expr<'t>) {
-                assert!(expr.typ.is_some(), "expression {expr:?} has no type");
-                expr.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+                if let Some(typ) = expr.typ.as_mut() {
+                    *typ = self.subs.apply(*typ);
+                } else {
+                    panic!("expression {expr:?} has no type");
+                }
                 expr.visit_with(self);
             }
 
             fn visit_pat(&mut self, pat: &mut Pat<'t>) {
-                assert!(pat.typ.is_some(), "pattern {pat:?} has no type");
-                pat.typ.as_mut().map(|typ| *typ = self.subs.apply(*typ));
+                if let Some(typ) = pat.typ.as_mut() {
+                    *typ = self.subs.apply(*typ);
+                } else {
+                    panic!("pattern {pat:?} has no type");
+                }
                 pat.visit_with(self);
             }
         }
@@ -265,7 +275,7 @@ impl<'a, 't> Infer<'a, 't> {
                     let typ = *self
                         .variables
                         .get(&v.res)
-                        .expect(&format!("no type for var {v}"));
+                        .unwrap_or_else(|| panic!("no type for var {v}"));
                     v.typ = Some(typ);
                     typ
                 }
@@ -458,40 +468,6 @@ impl<'a, 't> Infer<'a, 't> {
         expr.typ = Some(expected);
         Ok(())
     }
-}
-
-fn eq_alpha<'t>(a: Ty<'t>, b: Ty<'t>) -> bool {
-    #[derive(Default)]
-    struct VarMap {
-        type_vars: Map<Ident, Ident>,
-    }
-
-    fn go<'a>(map: &mut VarMap, lhs: Ty<'a>, rhs: Ty<'a>) -> bool {
-        match (*lhs.kind(), *rhs.kind()) {
-            (lhs, rhs) if lhs == rhs => true,
-            (TyKind::Var(l), TyKind::Var(r)) => match map.type_vars.get(&l.name) {
-                Some(id) => *id == r.name,
-                None => {
-                    map.type_vars.insert(l.name, r.name);
-                    true
-                }
-            },
-            (TyKind::Uni(_), _) | (_, TyKind::Uni(_)) => unreachable!(),
-            (TyKind::App(l_res, l_args), TyKind::App(r_res, r_args)) => {
-                l_res == r_res
-                    && l_args.len() == r_args.len()
-                    && l_args.iter().zip(r_args).all(|(&l, &r)| go(map, l, r))
-            }
-            (TyKind::Arrow(l1, l2), TyKind::Arrow(r1, r2)) => go(map, l1, r1) && go(map, l2, r2),
-            (TyKind::Vector(l), TyKind::Vector(r)) => go(map, l, r),
-            (TyKind::Tuple(ls), TyKind::Tuple(rs)) => {
-                ls.len() == rs.len() && ls.iter().zip(rs).all(|(&l, &r)| go(map, l, r))
-            }
-            (_, _) => false,
-        }
-    }
-
-    go(&mut VarMap::default(), a, b)
 }
 
 base::newtype_index! {
