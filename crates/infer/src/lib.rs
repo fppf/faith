@@ -17,6 +17,7 @@ use ty::{Skolem, SkolemId, Ty, TyCtxt, TyKind, TypeFolder, TypeVar};
 use unify::Origin;
 
 pub mod hir;
+pub mod match_compile;
 pub mod ty;
 
 use hir::*;
@@ -346,7 +347,7 @@ impl<'a, 't> Infer<'a, 't> {
                 }
                 Ty::new(self.ctxt, TyKind::Vector(vector_base_ty))
             }
-            ExprKind::Case(scrutinee, arms) => {
+            ExprKind::Case(scrutinee, arms, _) => {
                 let scrutinee_span = scrutinee.span;
                 let scrutinee_ty = self.infer_expr(scrutinee.as_mut())?;
                 let var = self.fresh_var();
@@ -446,7 +447,7 @@ impl<'a, 't> Infer<'a, 't> {
     ) -> Result<(), InferError<'t>> {
         match (&mut expr.kind, expected.kind()) {
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
-            (ExprKind::Case(scrutinee, arms), _) => {
+            (ExprKind::Case(scrutinee, arms, _), _) => {
                 let scrutinee_span = scrutinee.span;
                 let scrutinee_ty = self.infer_expr(scrutinee)?;
                 for (pat, arm) in arms {

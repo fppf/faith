@@ -1,7 +1,6 @@
 #![allow(unused)]
 
 mod lower;
-//mod match_compile;
 mod mir;
 mod pretty;
 

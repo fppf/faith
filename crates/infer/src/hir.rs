@@ -8,7 +8,7 @@ use span::{Ident, SourceId, Sp, Span, Sym};
 
 pub use syntax::ast::Lit;
 
-use crate::{Res, ty::Ty};
+use crate::{Res, match_compile::DecisionTree, ty::Ty};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Var<'t> {
@@ -108,7 +108,7 @@ impl<'t> Expr<'t> {
             ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) => exprs.iter_mut().for_each(|expr| v.visit_expr(expr)),
             ExprKind::Vector(exprs) => exprs.iter_mut().for_each(|expr| v.visit_expr(expr)),
-            ExprKind::Case(expr, arms) => {
+            ExprKind::Case(expr, arms, _) => {
                 v.visit_expr(expr);
                 arms.iter_mut().for_each(|(pat, expr)| {
                     v.visit_pat(pat);
@@ -150,7 +150,11 @@ pub enum ExprKind<'t> {
     Ann(Box<Expr<'t>>, Sp<Ty<'t>>),
     Tuple(Vec<Expr<'t>>),
     Vector(Vec<Expr<'t>>),
-    Case(Box<Expr<'t>>, Vec<(Pat<'t>, Expr<'t>)>),
+    Case(
+        Box<Expr<'t>>,
+        Vec<(Pat<'t>, Expr<'t>)>,
+        Option<DecisionTree<'t>>,
+    ),
     If(Box<Expr<'t>>, Box<Expr<'t>>, Box<Expr<'t>>),
     Lambda(Lambda<'t>),
     Call(Box<Expr<'t>>, Vec<Expr<'t>>),

@@ -1,19 +1,27 @@
-use std::{cell::RefCell, fmt, hash::Hash};
+use std::{
+    cell::{Cell, RefCell},
+    fmt,
+    hash::Hash,
+};
 
 use base::{
     arena::Interned,
-    hash::{IndexSet, Map, Set},
+    hash::{IndexMap, IndexSet, Map, Set},
     pp::FormatIterator,
 };
 use span::Ident;
 
-use crate::{Res, Var};
+use crate::{Res, ResId, Var};
+
+pub use syntax::ast::BaseType;
 
 base::declare_arena!('t, []);
 
 pub struct TyCtxt<'t> {
     pub arena: &'t Arena<'t>,
     pub adts: RefCell<Map<Res, Adt<'t>>>,
+    pub cons_to_adt: RefCell<Map<Res, Res>>,
+    pub last_res_id: Cell<ResId>,
 }
 
 impl<'t> TyCtxt<'t> {
@@ -21,24 +29,54 @@ impl<'t> TyCtxt<'t> {
         Self {
             arena,
             adts: RefCell::default(),
+            cons_to_adt: RefCell::default(),
+            last_res_id: Cell::new(ResId::ZERO + 1),
         }
+    }
+
+    pub fn new_res_id(&self) -> ResId {
+        let next = self.last_res_id.get() + 1;
+        self.last_res_id.replace(next);
+        next
     }
 
     pub fn add_adt(&self, res: Res, adt: Adt<'t>) {
         let mut adts = self.adts.borrow_mut();
+        let mut cons_to_adt = self.cons_to_adt.borrow_mut();
+        for cons_res in adt.constructors.keys() {
+            cons_to_adt.insert(*cons_res, res);
+        }
         adts.insert(res, adt);
+    }
+
+    pub fn get_adt(&self, res: Res) -> Option<Adt<'t>> {
+        // FIXME(perf)
+        let adts = self.adts.borrow();
+        adts.get(&res).cloned()
+    }
+
+    pub fn get_constructor(&self, cons_res: Res) -> Option<Constructor<'t>> {
+        let cons_to_adt = self.cons_to_adt.borrow();
+        let adt_res = cons_to_adt.get(&cons_res)?;
+        self.adts
+            .borrow()
+            .get(&adt_res)
+            .and_then(|adt| adt.constructors.get(&cons_res))
+            .copied()
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Adt<'t> {
     pub id: Ident,
-    pub constructors: Map<Res, Constructor<'t>>,
+    pub constructors: IndexMap<Res, Constructor<'t>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Constructor<'t> {
     pub var: Var<'t>,
+    pub args: &'t [Ty<'t>],
+    pub index: usize,
     pub arity: usize,
     pub adt: Res,
 }
@@ -50,7 +88,7 @@ pub struct Ty<'t>(Interned<'t, TyKind<'t>>);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyKind<'t> {
     /// A base/builtin type.
-    Base(syntax::ast::BaseType),
+    Base(BaseType),
 
     /// A user-defined type.
     User(Ident, Res),
@@ -199,6 +237,14 @@ impl<'t> Ty<'t> {
     pub fn as_var(self) -> Option<UniVarId> {
         match self.kind() {
             TyKind::Uni(var) => Some(var.id),
+            _ => None,
+        }
+    }
+
+    pub fn as_user(self) -> Option<Res> {
+        match self.kind() {
+            TyKind::User(_, res) => Some(*res),
+            TyKind::App(ty, _) => ty.as_user(),
             _ => None,
         }
     }

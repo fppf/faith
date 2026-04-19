@@ -6,7 +6,10 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use base::{hash::Map, index::IndexVec};
+use base::{
+    hash::{IndexMap, Map},
+    index::IndexVec,
+};
 use span::{
     Ident, SourceId, Sp, Span, Sym,
     diag::{Diagnostic, Label, Level},
@@ -17,7 +20,7 @@ use syntax::ast::{
 };
 
 use crate::{
-    DefKind, Res, ResId,
+    DefKind, Res,
     hir::{self, HirVisitor, Var},
     ty::{Adt, Constructor, Ty, TyCtxt, TyKind, TypeVar},
 };
@@ -233,8 +236,6 @@ struct Resolver<'ast, 't> {
 
     // Which module (comp unit or inline) we are processing.
     current_module_id: ModuleId,
-
-    last_res_id: ResId,
 }
 
 impl<'ast, 't> Resolver<'ast, 't> {
@@ -251,7 +252,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
             locals: ScopedMap::default(),
             variables: Map::default(),
             current_module_id,
-            last_res_id: ResId::ZERO + 1,
         }
     }
 
@@ -279,12 +279,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
         })
     }
 
-    fn new_res_id(&mut self) -> ResId {
-        let next = self.last_res_id + 1;
-        self.last_res_id = next;
-        next
-    }
-
     fn make_var(&mut self, id: ast::Id, res: Res, typ: Option<Ty<'t>>) -> Var<'t> {
         let mut var = Var::new(id.ident, res, id.ident.span);
         var.typ = typ;
@@ -301,7 +295,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
     }
 
     fn make_local(&mut self, id: ast::Id) -> Var<'t> {
-        let res = Res::Local(self.new_res_id());
+        let res = Res::Local(self.ctxt.new_res_id());
         let var = self.make_var(id, res, None);
         self.locals.insert(id.ident, var);
         var
@@ -464,7 +458,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 for decl in decls {
                     seen.update(Namespace::Type, decl.id.ident)?;
 
-                    let decl_res = Res::Def(DefKind::Type, self.new_res_id());
+                    let decl_res = Res::Def(DefKind::Type, self.ctxt.new_res_id());
                     let decl_typ = Ty::new(self.ctxt, TyKind::User(decl.id.ident, decl_res));
                     let decl_var = self.make_var(decl.id, decl_res, Some(decl_typ));
                     decl_vars.push(decl_var);
@@ -500,11 +494,11 @@ impl<'ast, 't> Resolver<'ast, 't> {
                                     .map(|id| Ty::type_var(self.ctxt, TypeVar::new(id.ident))),
                             );
 
-                            let mut constructors = Map::default();
-                            for &(id, args) in variants {
+                            let mut constructors = IndexMap::default();
+                            for (index, &(id, args)) in variants.iter().enumerate() {
                                 seen.update(Namespace::Value, id.ident)?;
 
-                                let cons_res = Res::Def(DefKind::Cons, self.new_res_id());
+                                let cons_res = Res::Def(DefKind::Cons, self.ctxt.new_res_id());
 
                                 self.current_module_mut().cons.insert(id.ident, cons_res);
 
@@ -515,12 +509,15 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                                 // Constructor (Ci ti1 .. tik) is given type
                                 // (ti1 -> .. -> tik -> (T 'a1 .. 'ak))
+                                let arity = new_args.len();
                                 let cons_typ =
                                     Ty::n_arrow(self.ctxt, new_args.iter().copied(), adt_typ);
                                 let cons_var = self.make_var(id, cons_res, Some(cons_typ));
                                 let cons = Constructor {
                                     var: cons_var,
-                                    arity: new_args.len(),
+                                    args: self.ctxt.arena.alloc_from_iter(new_args),
+                                    index,
+                                    arity,
                                     adt: adt_res,
                                 };
                                 constructors.insert(cons_res, cons);
@@ -543,7 +540,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
 
                 let typ = self.lower_type(ast_ty)?;
 
-                let ext_res = Res::Def(DefKind::Value, self.new_res_id());
+                let ext_res = Res::Def(DefKind::Value, self.ctxt.new_res_id());
                 let _ext_var = self.make_external_var(id, ext_res, typ, mapped_to.sym);
 
                 self.current_module_mut().values.insert(ident, ext_res);
@@ -552,7 +549,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let (ident, ast_id) = (id.ident, id.ast_id);
                 seen.update(Namespace::Value, ident)?;
 
-                let val_res = Res::Def(DefKind::Value, self.new_res_id());
+                let val_res = Res::Def(DefKind::Value, self.ctxt.new_res_id());
                 let val_var = self.make_var(id, val_res, None);
 
                 // Insert res into scope before resolving expr
@@ -753,7 +750,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                         Ok(())
                     })?;
                 }
-                hir::ExprKind::Case(Box::new(new_e), new_arms)
+                hir::ExprKind::Case(Box::new(new_e), new_arms, None)
             }
             ExprKind::If(cond, e1, e2) => {
                 let new_cond = self.resolve_expr(cond)?;

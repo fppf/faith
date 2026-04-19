@@ -54,11 +54,13 @@ fn run_passes(
 
     let ty_arena = infer::ty::Arena::default();
     let ctxt = infer::ty::TyCtxt::new(&ty_arena);
-    let hir = infer::infer_program_in(&ctxt, program)?;
+    let mut hir = infer::infer_program_in(&ctxt, program)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
+
+    infer::match_compile::compile(&ctxt, &mut hir);
 
     let mir = mir::lower(&ctxt, &hir);
     let doc_arena = DocArena::default();

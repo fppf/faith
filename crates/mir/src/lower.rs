@@ -184,7 +184,9 @@ impl<'a, 't> LoweringContext<'a, 't> {
             }
             ExprKind::Ann(e, _) => self.lower_expr_ctx(e, ctx),
             ExprKind::If(cond, e1, e2) => self.lower_expr_ctx(cond, Ctx::If(e1, e2, Box::new(ctx))),
-            ExprKind::Case(e, arms) => self.lower_expr_ctx(e, Ctx::Case(&arms, Box::new(ctx))),
+            ExprKind::Case(e, arms, _tree) => {
+                self.lower_expr_ctx(e, Ctx::Case(&arms, Box::new(ctx)))
+            }
             ExprKind::Tuple(es) => {
                 assert!(!es.is_empty());
                 self.lower_expr_ctx(
