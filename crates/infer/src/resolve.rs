@@ -694,7 +694,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
             }
             PatKind::Or(ps) => hir::PatKind::Or(self.resolve_pats(ps)?),
         };
-        Ok(hir::Pat::new(kind, pat.span))
+        Ok(hir::Pat::new(kind, pat.span, None))
     }
 
     fn resolve_pats(&mut self, pats: &'ast [Pat<'ast>]) -> Result<Vec<hir::Pat<'t>>, ResolveError> {
@@ -782,7 +782,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 hir::ExprKind::Seq(Box::new(new_e1), Box::new(new_e2))
             }
         };
-        Ok(hir::Expr::new(kind, expr.span))
+        Ok(hir::Expr::new(kind, expr.span, None))
     }
 
     fn resolve_exprs(

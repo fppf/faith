@@ -60,7 +60,7 @@ impl<'t> TyCtxt<'t> {
         let adt_res = cons_to_adt.get(&cons_res)?;
         self.adts
             .borrow()
-            .get(&adt_res)
+            .get(adt_res)
             .and_then(|adt| adt.constructors.get(&cons_res))
             .copied()
     }

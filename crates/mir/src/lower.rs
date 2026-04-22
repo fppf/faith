@@ -3,13 +3,14 @@ use std::collections::VecDeque;
 use base::{hash::Map, index::Idx};
 use infer::{
     Res, ResId, hir,
+    match_compile::{CompiledCase, Constructor, DecisionTree},
     ty::{Ty, TyCtxt},
 };
 use span::{Ident, Sp, Span, Sym};
 
 use crate::{Func, Join, JoinId, Value, Var, mir};
 
-pub fn lower<'a, 't>(ctxt: &'t TyCtxt<'t>, program: &'a hir::Program<'t>) -> mir::Program {
+pub fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
     LoweringContext::new(ctxt, program).lower()
 }
 
@@ -27,7 +28,12 @@ enum Ctx<'a, 't> {
     Ret,
     Jump(JoinId),
     If(&'a hir::Expr<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
-    Case(&'a [(hir::Pat<'t>, hir::Expr<'t>)], Box<Ctx<'a, 't>>),
+    Case(
+        mir::Var,
+        &'a [(hir::Pat<'t>, hir::Expr<'t>)],
+        &'a CompiledCase<'t>,
+        Box<Ctx<'a, 't>>,
+    ),
     List(
         ListKind,
         &'a [hir::Expr<'t>],
@@ -104,7 +110,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         let id = Ident::new(mir_var.sym, Span::dummy());
         let hir_var = hir::Var::new(id, Res::dummy(), id.span);
         self.temporaries.insert(id, mir_var);
-        let expr = hir::Expr::new(hir::ExprKind::Var(hir_var), Span::dummy());
+        let expr = hir::Expr::new(hir::ExprKind::Var(hir_var), Span::dummy(), None);
         (hir_var, mir_var)
     }
 
@@ -184,21 +190,23 @@ impl<'a, 't> LoweringContext<'a, 't> {
             }
             ExprKind::Ann(e, _) => self.lower_expr_ctx(e, ctx),
             ExprKind::If(cond, e1, e2) => self.lower_expr_ctx(cond, Ctx::If(e1, e2, Box::new(ctx))),
-            ExprKind::Case(e, arms, _tree) => {
-                self.lower_expr_ctx(e, Ctx::Case(&arms, Box::new(ctx)))
+            ExprKind::Case(e, arms, Some(compiled)) => {
+                let branch_var = self.get_or_insert_var(compiled.branch_var);
+                self.lower_expr_ctx(e, Ctx::Case(branch_var, arms, compiled, Box::new(ctx)))
             }
+            ExprKind::Case(_, _, None) => unreachable!(),
             ExprKind::Tuple(es) => {
                 assert!(!es.is_empty());
                 self.lower_expr_ctx(
                     &es[0],
-                    Ctx::List(ListKind::Tuple, &es, 1, Vec::new(), Box::new(ctx)),
+                    Ctx::List(ListKind::Tuple, es, 1, Vec::new(), Box::new(ctx)),
                 )
             }
             ExprKind::Vector(es) => {
                 if !es.is_empty() {
                     self.lower_expr_ctx(
                         &es[0],
-                        Ctx::List(ListKind::Vector, &es, 1, Vec::new(), Box::new(ctx)),
+                        Ctx::List(ListKind::Vector, es, 1, Vec::new(), Box::new(ctx)),
                     )
                 } else {
                     self.lower_expr_ret(Value::Lit(mir::Lit::EmptyVector), ctx)
@@ -206,7 +214,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             }
             ExprKind::Call(f, args) => self.lower_expr_ctx(
                 f,
-                Ctx::List(ListKind::Call, &args, 0, Vec::new(), Box::new(ctx)),
+                Ctx::List(ListKind::Call, args, 0, Vec::new(), Box::new(ctx)),
             ),
             ExprKind::Lambda(lambda) => {
                 let (_, func_var) = self.insert_var("f");
@@ -241,7 +249,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 assert!(!binds.is_empty());
                 self.lower_expr_ctx(&binds[0].1, Ctx::Let(binds, 1, body, Box::new(ctx)))
             }
-            ExprKind::Seq(e1, e2) => self.lower_expr_ctx(&e1, Ctx::Seq(&e2, Box::new(ctx))),
+            ExprKind::Seq(e1, e2) => self.lower_expr_ctx(e1, Ctx::Seq(e2, Box::new(ctx))),
         }
     }
 
@@ -294,7 +302,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     ))),
                 })
             }
-            Ctx::Case(arms, ctx) => {
+            Ctx::Case(branch_var, arms, compiled, ctx) => {
                 let join_id = JoinId(self.next_stamp());
                 let (_, join_arg) = self.insert_var("p");
                 let join = Join {
@@ -302,15 +310,13 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     args: vec![join_arg],
                     body: Box::new(self.lower_expr_ret(Value::Var(join_arg), *ctx)),
                 };
-                let mut lowered_arms = Vec::new();
-                for (pat, expr) in arms {
-                    //let pat = todo!();
-                    //let expr = self.lower_expr_ctx(expr, Ctx::Jump(join_id));
-                    //lowered_arms.push((pat, expr));
-                }
-                mir::Expr::new(mir::ExprKind::LetJoin {
-                    join,
-                    body: Box::new(mir::Expr::new(mir::ExprKind::Case(value, lowered_arms))),
+                mir::Expr::new(mir::ExprKind::Let {
+                    lhs: self.get_var(compiled.branch_var),
+                    rhs: mir::Rhs::Value(value),
+                    body: Box::new(mir::Expr::new(mir::ExprKind::LetJoin {
+                        join,
+                        body: Box::new(self.lower_decision_tree(join_id, &compiled.tree, arms)),
+                    })),
                 })
             }
             Ctx::List(kind, exprs, index, mut values, ctx) => {
@@ -322,7 +328,6 @@ impl<'a, 't> LoweringContext<'a, 't> {
                             let (func, args) = values.split_first().unwrap();
                             let func = match func {
                                 Value::Var(var) => *var,
-                                Value::External(s) => todo!(),
                                 Value::Lit(_) => panic!("literal in function position"),
                             };
                             mir::Rhs::Call(mir::Call {
@@ -424,7 +429,6 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     body: Box::new(body),
                 })
             }
-
             Ctx::Seq(e2, ctx) => {
                 let (_, unused) = self.insert_var("seq");
                 let e2 = self.lower_expr_ctx(e2, *ctx);
@@ -473,6 +477,66 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 todo!("implement irrefutable pattern destructuring")
             }
             PatKind::Or(_) => todo!("implement or patterns"),
+        }
+    }
+
+    fn lower_decision_tree(
+        &mut self,
+        join_id: JoinId,
+        tree: &'a DecisionTree<'t>,
+        arms: &'a [(hir::Pat<'t>, hir::Expr<'t>)],
+    ) -> mir::Expr {
+        match tree {
+            DecisionTree::Fail => {
+                // TODO. handle as diagnostic
+                panic!("fail reached")
+            }
+            DecisionTree::Leaf(body) => {
+                let binds: Vec<_> = body
+                    .binds
+                    .iter()
+                    .map(|&(v1, v2)| (self.get_or_insert_var(v1), self.get_var(v2)))
+                    .collect();
+
+                let action = &arms[body.action].1;
+                let body = self.lower_expr_ctx(action, Ctx::Jump(join_id));
+
+                binds.into_iter().rev().fold(body, |acc, (lhs, rhs)| {
+                    mir::Expr::new(mir::ExprKind::Let {
+                        lhs,
+                        rhs: mir::Rhs::Value(Value::Var(rhs)),
+                        body: Box::new(acc),
+                    })
+                })
+            }
+            DecisionTree::Switch(var, cases) => {
+                let mut case_arms = Vec::new();
+                for case in cases {
+                    let vars: Vec<_> = case
+                        .variables
+                        .iter()
+                        .map(|&v| {
+                            let v = self.get_or_insert_var(v);
+                            mir::Pat::Var(v)
+                        })
+                        .collect();
+
+                    let pat = match case.constructor {
+                        Constructor::Unit => mir::Pat::Lit(mir::Lit::Unit),
+                        Constructor::Bool(b) => mir::Pat::Lit(mir::Lit::Bool(b)),
+                        Constructor::Tuple(_) => mir::Pat::Tuple(vars),
+                        Constructor::Variant(v, _) => {
+                            let v = self.get_var(v);
+                            mir::Pat::Cons(v, vars)
+                        }
+                    };
+                    let expr = self.lower_decision_tree(join_id, &case.tree, arms);
+                    case_arms.push((pat, expr));
+                }
+
+                let var = self.get_or_insert_var(*var);
+                mir::Expr::new(mir::ExprKind::Case(Value::Var(var), case_arms))
+            }
         }
     }
 }

@@ -97,9 +97,9 @@ use crate::{
 //   - https://compiler.club/compiling-pattern-matching/
 //   - https://github.com/SomewhatML/match-compile/
 
-pub fn compile<'a, 't>(
+pub fn compile<'t>(
     ctxt: &'t TyCtxt<'t>,
-    program: &'a mut Program<'t>,
+    program: &mut Program<'t>,
 ) -> Result<(), Diagnostic> {
     let mut compiler = MatchCompiler::new(ctxt);
     compiler.visit_program(program);
@@ -115,21 +115,31 @@ pub fn compile<'a, 't>(
 }
 
 #[derive(Clone, Debug)]
+pub struct CompiledCase<'t> {
+    pub branch_var: Var<'t>,
+    pub tree: DecisionTree<'t>,
+}
+
+#[derive(Clone, Debug)]
 pub enum DecisionTree<'t> {
     Fail,
     Leaf(Body<'t>),
-    Switch(Var<'t>, Vec<Case<'t>>, Option<Box<DecisionTree<'t>>>),
+    Switch(Var<'t>, Vec<Case<'t>>),
 }
 
 #[derive(Clone, Debug)]
 pub struct Case<'t> {
-    pub constructor: Constructor,
+    pub constructor: Constructor<'t>,
     pub variables: Vec<Var<'t>>,
     pub tree: DecisionTree<'t>,
 }
 
 impl<'t> Case<'t> {
-    pub fn new(constructor: Constructor, variables: Vec<Var<'t>>, tree: DecisionTree<'t>) -> Self {
+    pub fn new(
+        constructor: Constructor<'t>,
+        variables: Vec<Var<'t>>,
+        tree: DecisionTree<'t>,
+    ) -> Self {
         Self {
             constructor,
             variables,
@@ -139,23 +149,23 @@ impl<'t> Case<'t> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Constructor {
+pub enum Constructor<'t> {
     Unit,
     Bool(bool),
     Tuple(usize),
-    Ident(Ident, usize),
+    Variant(Var<'t>, usize),
 }
 
 #[derive(Clone, Debug)]
 pub struct Body<'t> {
-    pub bindings: Vec<(Var<'t>, Var<'t>)>,
+    pub binds: Vec<(Var<'t>, Var<'t>)>,
     pub action: usize,
 }
 
 impl<'t> Body<'t> {
     fn new(action: usize) -> Self {
         Body {
-            bindings: Vec::new(),
+            binds: Vec::new(),
             action,
         }
     }
@@ -264,27 +274,23 @@ struct MatchCompiler<'t> {
 impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
     fn visit_expr(&mut self, expr: &mut Expr<'t>) {
         match &mut expr.kind {
-            ExprKind::Case(scrutinee, arms, tree) => {
-                assert!(tree.is_none());
+            ExprKind::Case(scrutinee, arms, compiled) => {
+                assert!(compiled.is_none());
 
                 self.reachable.clear();
 
                 let mut var = Var::new(
-                    Ident::new(Sym::intern("~case"), scrutinee.span),
+                    Ident::new(Sym::intern("~m"), scrutinee.span),
                     Res::Local(self.ctxt.new_res_id()),
                     scrutinee.span,
                 );
                 var.typ = scrutinee.typ;
+
                 let mut matrix = Matrix::new_from_case(var, arms);
-
-                let tree_ = self.compile_matrix(&mut matrix);
-
-                //println!("{:#?}", tree);
+                let tree = self.compile_matrix(&mut matrix);
 
                 let doc_arena = DocArena::default();
-                println!("{}", tree_.to_doc(&doc_arena).pretty_string(100));
-
-                tree.replace(tree_);
+                println!("{}", tree.to_doc(&doc_arena).pretty_string(100));
 
                 if !self.reachable.is_empty() {
                     let mut spans = Vec::new();
@@ -301,6 +307,12 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                     }
                     self.reachable.clear();
                 }
+
+                let result = CompiledCase {
+                    branch_var: var,
+                    tree,
+                };
+                compiled.replace(result);
             }
             _ => expr.visit_with(self),
         }
@@ -339,7 +351,7 @@ impl<'t> MatchCompiler<'t> {
         for row in matrix.clauses.iter_mut() {
             row.tests.retain(|e| match e.pat.kind {
                 PatKind::Var(var) => {
-                    row.body.bindings.push((var, e.var));
+                    row.body.binds.push((var, e.var));
                     false
                 }
                 PatKind::Wild => {
@@ -349,7 +361,7 @@ impl<'t> MatchCompiler<'t> {
                         e.pat.span,
                     );
                     var.typ = e.pat.typ;
-                    row.body.bindings.push((var, e.var));
+                    row.body.binds.push((var, e.var));
                     false
                 }
                 _ => true,
@@ -378,27 +390,15 @@ impl<'t> MatchCompiler<'t> {
             for cons in adt.constructors.values() {
                 let vars = self.generate_typed_vars(cons.args);
                 // OK because adt.constructors is an index map
-                cases.push((
-                    Constructor::Ident(cons.var.id, cons.index),
-                    vars,
-                    Vec::new(),
-                ));
+                cases.push((Constructor::Variant(cons.var, cons.index), vars, Vec::new()));
             }
-            return DecisionTree::Switch(
-                branch_var,
-                self.compile_cases(matrix, branch_var, cases),
-                None,
-            );
+            return DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases));
         }
 
         match branch_typ.kind() {
             TyKind::Base(BaseType::Unit) => {
                 let cases = vec![(Constructor::Unit, Vec::new(), Vec::new())];
-                DecisionTree::Switch(
-                    branch_var,
-                    self.compile_cases(matrix, branch_var, cases),
-                    None,
-                )
+                DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases))
             }
             TyKind::Base(BaseType::Bool) => {
                 // FIXME. enforce idx
@@ -408,21 +408,13 @@ impl<'t> MatchCompiler<'t> {
                     // BOOL_FALSE_IDX
                     (Constructor::Bool(false), Vec::new(), Vec::new()),
                 ];
-                DecisionTree::Switch(
-                    branch_var,
-                    self.compile_cases(matrix, branch_var, cases),
-                    None,
-                )
+                DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases))
             }
             TyKind::Base(_) => todo!("add support for branching on primitives"),
             TyKind::Tuple(typs) => {
                 let vars = self.generate_typed_vars(typs);
                 let cases = vec![(Constructor::Tuple(typs.len()), vars, Vec::new())];
-                DecisionTree::Switch(
-                    branch_var,
-                    self.compile_cases(matrix, branch_var, cases),
-                    None,
-                )
+                DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases))
             }
             TyKind::Vector(_) => todo!("add support for matching vectors"),
             TyKind::User(..)
@@ -441,7 +433,7 @@ impl<'t> MatchCompiler<'t> {
         &mut self,
         matrix: &mut Matrix<'a, 't>,
         branch_var: Var<'t>,
-        mut cases: Vec<(Constructor, Vec<Var<'t>>, Vec<Clause<'a, 't>>)>,
+        mut cases: Vec<(Constructor<'t>, Vec<Var<'t>>, Vec<Clause<'a, 't>>)>,
     ) -> Vec<Case<'t>> {
         for clause in &mut matrix.clauses {
             if let Some(test) = clause.remove_test(branch_var) {
@@ -510,19 +502,19 @@ impl<'t> DecisionTree<'t> {
             DecisionTree::Fail => arena.text("fail"),
             DecisionTree::Leaf(body) => arena
                 .intersperse(
-                    body.bindings
+                    body.binds
                         .iter()
                         .map(|(x, y)| x.into_doc(arena).append(" := ").append(y.into_doc(arena))),
                     arena.line(),
                 )
-                .append(if body.bindings.is_empty() {
+                .append(if body.binds.is_empty() {
                     arena.empty()
                 } else {
                     arena.line()
                 })
                 .append(arena.text("action "))
                 .append(arena.text(body.action.to_string())),
-            DecisionTree::Switch(var, cases, _tree) => {
+            DecisionTree::Switch(var, cases) => {
                 arena.text("switch ").append(var.into_doc(arena)).append(
                     arena
                         .line()
@@ -539,13 +531,13 @@ impl<'t> DecisionTree<'t> {
     }
 }
 
-impl Constructor {
+impl<'t> Constructor<'t> {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
             Constructor::Unit => arena.text("()"),
             Constructor::Bool(b) => arena.text(b.to_string()),
             Constructor::Tuple(n) => arena.text(format!("({n})")),
-            Constructor::Ident(id, _) => arena.text(id.to_string()),
+            Constructor::Variant(v, _) => arena.text(v.to_string()),
         }
     }
 }

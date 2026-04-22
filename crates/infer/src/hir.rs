@@ -11,7 +11,7 @@ use span::{Ident, SourceId, Sp, Span, Sym};
 
 pub use syntax::ast::Lit;
 
-use crate::{Res, match_compile::DecisionTree, ty::Ty};
+use crate::{Res, match_compile::CompiledCase, ty::Ty};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Var<'t> {
@@ -99,12 +99,8 @@ pub struct Expr<'t> {
 }
 
 impl<'t> Expr<'t> {
-    pub fn new(kind: ExprKind<'t>, span: Span) -> Self {
-        Self {
-            kind,
-            span,
-            typ: None,
-        }
+    pub fn new(kind: ExprKind<'t>, span: Span, typ: Option<Ty<'t>>) -> Self {
+        Self { kind, span, typ }
     }
 
     pub fn visit_with<V>(&mut self, v: &mut V)
@@ -162,7 +158,7 @@ pub enum ExprKind<'t> {
     Case(
         Box<Expr<'t>>,
         Vec<(Pat<'t>, Expr<'t>)>,
-        Option<DecisionTree<'t>>,
+        Option<CompiledCase<'t>>,
     ),
     If(Box<Expr<'t>>, Box<Expr<'t>>, Box<Expr<'t>>),
     Lambda(Lambda<'t>),
@@ -185,12 +181,8 @@ pub struct Pat<'t> {
 }
 
 impl<'t> Pat<'t> {
-    pub fn new(kind: PatKind<'t>, span: Span) -> Self {
-        Self {
-            kind,
-            span,
-            typ: None,
-        }
+    pub fn new(kind: PatKind<'t>, span: Span, typ: Option<Ty<'t>>) -> Self {
+        Self { kind, span, typ }
     }
 
     pub fn visit_with<V>(&mut self, v: &mut V)

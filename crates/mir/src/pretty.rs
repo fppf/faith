@@ -55,10 +55,6 @@ impl<'a> IntoDoc<'a> for Value {
         match self {
             Value::Var(x) => x.into_doc(arena),
             Value::Lit(l) => l.into_doc(arena),
-            Value::External(s) => arena
-                .text("#")
-                .append(arena.text(s.as_str().to_string()).enclose("(", ")"))
-                .group(),
         }
     }
 }
@@ -140,9 +136,16 @@ impl Rhs {
 impl Pat {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
-            Pat::Wild => arena.text("_"),
+            Pat::Var(v) => v.into_doc(arena),
             Pat::Lit(lit) => lit.into_doc(arena),
-            Pat::Cons(c, _ps) => c.into_doc(arena),
+            Pat::Tuple(ps) => arena
+                .intersperse(ps.iter().map(|p| p.to_doc(arena)), arena.text(", "))
+                .enclose("(", ")"),
+            Pat::Cons(c, ps) => c.into_doc(arena).append(
+                arena
+                    .intersperse(ps.iter().map(|p| p.to_doc(arena)), arena.text(", "))
+                    .enclose("(", ")"),
+            ),
         }
     }
 }

@@ -69,7 +69,6 @@ pub struct JoinId(pub u32);
 pub enum Value {
     Var(Var),
     Lit(Lit),
-    External(Sym),
 }
 
 #[derive(Clone, Debug)]
@@ -97,8 +96,9 @@ pub struct Join {
 
 #[derive(Clone, Debug)]
 pub enum Pat {
-    Wild,
+    Var(Var),
     Lit(Lit),
+    Tuple(Vec<Pat>),
     Cons(Var, Vec<Pat>),
 }
 
