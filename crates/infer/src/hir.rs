@@ -3,7 +3,10 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use base::hash::Map;
+use base::{
+    hash::Map,
+    pp::{DocArena, DocBuilder, IntoDoc},
+};
 use span::{Ident, SourceId, Sp, Span, Sym};
 
 pub use syntax::ast::Lit;
@@ -48,11 +51,17 @@ impl<'t> Hash for Var<'t> {
 
 impl<'t> fmt::Display for Var<'t> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}~{}", self.id, self.res)?;
+        write!(f, "{}/{}", self.id, self.res)?;
         if let Some(ty) = self.typ {
             write!(f, ":{ty}")?;
         }
         Ok(())
+    }
+}
+
+impl<'a, 't> IntoDoc<'a> for Var<'t> {
+    fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        self.to_string().into_doc(arena)
     }
 }
 

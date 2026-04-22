@@ -1,4 +1,7 @@
-use base::hash::Map;
+use base::{
+    hash::Map,
+    pp::{DocArena, DocBuilder, INDENT, IntoDoc},
+};
 use span::{Ident, Span, Sym};
 
 use crate::{
@@ -46,7 +49,7 @@ use crate::{
 //
 // The goal is an algorithm that takes such an input list of clauses
 // and outputs a decision tree of _primitive_ cases that test against
-// a single constructor:
+// bare constructors:
 //
 //   case# a {
 //      C a1 ... ak => [A],
@@ -99,7 +102,7 @@ pub fn compile<'a, 't>(ctxt: &'t TyCtxt<'t>, program: &'a mut Program<'t>) {
 #[derive(Clone, Debug)]
 pub enum DecisionTree<'t> {
     Fail,
-    Leaf(usize),
+    Leaf(Body<'t>),
     Switch(Var<'t>, Vec<Case<'t>>, Option<Box<DecisionTree<'t>>>),
 }
 
@@ -123,8 +126,23 @@ impl<'t> Case<'t> {
 #[derive(Clone, Copy, Debug)]
 pub enum Constructor {
     Bool(bool),
-    Tuple(usize),
+    //Tuple(usize),
     Ident(Ident, usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct Body<'t> {
+    pub bindings: Vec<(Var<'t>, Var<'t>)>,
+    pub action: usize,
+}
+
+impl<'t> Body<'t> {
+    fn new(action: usize) -> Self {
+        Body {
+            bindings: Vec::new(),
+            action,
+        }
+    }
 }
 
 const BOOL_TRUE_IDX: usize = 0;
@@ -165,21 +183,6 @@ struct Test<'a, 't> {
 impl<'a, 't> Test<'a, 't> {
     fn new(var: Var<'t>, pat: &'a Pat<'t>) -> Self {
         Test { var, pat }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Body<'t> {
-    bindings: Vec<(Var<'t>, Var<'t>)>,
-    action: usize,
-}
-
-impl<'t> Body<'t> {
-    fn new(action: usize) -> Self {
-        Body {
-            bindings: Vec::new(),
-            action,
-        }
     }
 }
 
@@ -232,7 +235,15 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                 );
                 var.typ = scrutinee.typ;
                 let mut matrix = Matrix::new_from_case(var, arms);
-                tree.replace(self.compile_matrix(&mut matrix));
+
+                let tree_ = self.compile_matrix(&mut matrix);
+
+                //println!("{:#?}", tree);
+
+                let doc_arena = DocArena::default();
+                println!("{}", tree_.to_doc(&doc_arena).pretty_string(100));
+
+                tree.replace(tree_);
             }
             _ => expr.visit_with(self),
         }
@@ -273,7 +284,7 @@ impl<'t> MatchCompiler<'t> {
         // If the first clause has no tests, then we have a successful match.
         if matrix.clauses[0].tests.is_empty() {
             let row = matrix.clauses.remove(0);
-            return DecisionTree::Leaf(row.body.action);
+            return DecisionTree::Leaf(row.body);
         }
 
         let branch_var = matrix
@@ -296,7 +307,7 @@ impl<'t> MatchCompiler<'t> {
                         Res::Local(self.ctxt.new_res_id()),
                         Span::dummy(),
                     );
-                    var.typ = Some(*typ);
+                    var.typ = Some(*typ); // FIXME instantiate to actual type
                     vars.push(var);
                 }
                 // OK because adt.constructors is an index map
@@ -390,5 +401,68 @@ impl<'t> MatchCompiler<'t> {
                 Case::new(cons, vars, self.compile_matrix(&mut matrix))
             })
             .collect()
+    }
+}
+
+impl<'t> DecisionTree<'t> {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            DecisionTree::Fail => arena.text("fail"),
+            DecisionTree::Leaf(body) => arena
+                .intersperse(
+                    body.bindings
+                        .iter()
+                        .map(|(x, y)| x.into_doc(arena).append(" := ").append(y.into_doc(arena))),
+                    arena.line(),
+                )
+                .append(if body.bindings.is_empty() {
+                    arena.empty()
+                } else {
+                    arena.line()
+                })
+                .append(arena.text("action "))
+                .append(arena.text(body.action.to_string())),
+            DecisionTree::Switch(var, cases, _tree) => {
+                arena.text("switch ").append(var.into_doc(arena)).append(
+                    arena
+                        .line()
+                        .append(
+                            arena.intersperse(
+                                cases.iter().map(|case| case.to_doc(arena)),
+                                arena.line(),
+                            ),
+                        )
+                        .nest(INDENT),
+                )
+            }
+        }
+    }
+}
+
+impl Constructor {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            Constructor::Bool(b) => arena.text(b.to_string()),
+            Constructor::Ident(id, _) => arena.text(id.to_string()),
+        }
+    }
+}
+
+impl<'t> Case<'t> {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        self.constructor
+            .to_doc(arena)
+            .append(if self.variables.is_empty() {
+                arena.empty()
+            } else {
+                arena
+                    .intersperse(
+                        self.variables.iter().map(|var| var.into_doc(arena)),
+                        arena.text(", "),
+                    )
+                    .enclose("(", ")")
+            })
+            .append(" => ")
+            .append(arena.line().append(self.tree.to_doc(arena)).nest(INDENT))
     }
 }
