@@ -10,7 +10,7 @@ use span::{
 use crate::{
     Res, Var,
     hir::*,
-    ty::{BaseType, TyCtxt, TyKind},
+    ty::{BaseType, Ty, TyCtxt, TyKind},
 };
 
 // The pattern match compilation algorithm is due to Jules Jacobs
@@ -142,7 +142,7 @@ impl<'t> Case<'t> {
 pub enum Constructor {
     Unit,
     Bool(bool),
-    //Tuple(usize),
+    Tuple(usize),
     Ident(Ident, usize),
 }
 
@@ -295,8 +295,10 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                             spans.push(arm_span);
                         }
                     }
-                    self.errors
-                        .push(MatchError::RedundantArms(scrutinee.span, spans));
+                    if !spans.is_empty() {
+                        self.errors
+                            .push(MatchError::RedundantArms(scrutinee.span, spans));
+                    }
                     self.reachable.clear();
                 }
             }
@@ -312,6 +314,20 @@ impl<'t> MatchCompiler<'t> {
             reachable: Set::default(),
             errors: Vec::new(),
         }
+    }
+
+    fn generate_typed_vars(&self, typs: &'t [Ty<'t>]) -> Vec<Var<'t>> {
+        let mut vars = Vec::with_capacity(typs.len());
+        for (idx, typ) in typs.iter().enumerate() {
+            let mut var = Var::new(
+                Ident::new(Sym::intern(&format!("~t{idx}")), Span::dummy()),
+                Res::Local(self.ctxt.new_res_id()),
+                Span::dummy(),
+            );
+            var.typ = Some(*typ);
+            vars.push(var);
+        }
+        vars
     }
 
     fn compile_matrix<'a>(&mut self, matrix: &mut Matrix<'a, 't>) -> DecisionTree<'t> {
@@ -360,16 +376,7 @@ impl<'t> MatchCompiler<'t> {
             let num_cons = adt.constructors.len();
             let mut cases = Vec::with_capacity(num_cons);
             for cons in adt.constructors.values() {
-                let mut vars = Vec::with_capacity(cons.args.len());
-                for (idx, typ) in cons.args.iter().enumerate() {
-                    let mut var = Var::new(
-                        Ident::new(Sym::intern(&format!("~t{idx}")), Span::dummy()),
-                        Res::Local(self.ctxt.new_res_id()),
-                        Span::dummy(),
-                    );
-                    var.typ = Some(*typ); // FIXME instantiate to actual type
-                    vars.push(var);
-                }
+                let vars = self.generate_typed_vars(cons.args);
                 // OK because adt.constructors is an index map
                 cases.push((
                     Constructor::Ident(cons.var.id, cons.index),
@@ -408,7 +415,15 @@ impl<'t> MatchCompiler<'t> {
                 )
             }
             TyKind::Base(_) => todo!("add support for branching on primitives"),
-            TyKind::Tuple(_typs) => todo!(),
+            TyKind::Tuple(typs) => {
+                let vars = self.generate_typed_vars(typs);
+                let cases = vec![(Constructor::Tuple(typs.len()), vars, Vec::new())];
+                DecisionTree::Switch(
+                    branch_var,
+                    self.compile_cases(matrix, branch_var, cases),
+                    None,
+                )
+            }
             TyKind::Vector(_) => todo!("add support for matching vectors"),
             TyKind::User(..)
             | TyKind::App(..)
@@ -442,6 +457,18 @@ impl<'t> MatchCompiler<'t> {
                         cases[idx]
                             .2
                             .push(Clause::new(tests.to_vec(), clause.body.clone()));
+                    }
+                    PatKind::Tuple(pats) => {
+                        if let Constructor::Tuple(n) = cases[0].0
+                            && n == pats.len()
+                        {
+                            for (var, pat) in cases[0].1.iter().zip(pats) {
+                                tests.push(Test::new(*var, pat));
+                            }
+                            cases[0]
+                                .2
+                                .push(Clause::new(tests.to_vec(), clause.body.clone()));
+                        }
                     }
                     PatKind::Cons(cons_var, args) => {
                         let cons = self
@@ -517,6 +544,7 @@ impl Constructor {
         match self {
             Constructor::Unit => arena.text("()"),
             Constructor::Bool(b) => arena.text(b.to_string()),
+            Constructor::Tuple(n) => arena.text(format!("({n})")),
             Constructor::Ident(id, _) => arena.text(id.to_string()),
         }
     }
