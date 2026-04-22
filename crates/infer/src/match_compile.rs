@@ -125,6 +125,7 @@ impl<'t> Case<'t> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Constructor {
+    Unit,
     Bool(bool),
     //Tuple(usize),
     Ident(Ident, usize),
@@ -325,6 +326,14 @@ impl<'t> MatchCompiler<'t> {
         }
 
         match branch_typ.kind() {
+            TyKind::Base(BaseType::Unit) => {
+                let cases = vec![(Constructor::Unit, Vec::new(), Vec::new())];
+                DecisionTree::Switch(
+                    branch_var,
+                    self.compile_cases(matrix, branch_var, cases),
+                    None,
+                )
+            }
             TyKind::Base(BaseType::Bool) => {
                 // FIXME. enforce idx
                 let cases = vec![
@@ -364,6 +373,11 @@ impl<'t> MatchCompiler<'t> {
             if let Some(test) = clause.remove_test(branch_var) {
                 let tests = &mut clause.tests;
                 match &test.pat.kind {
+                    PatKind::Lit(Lit::Unit) => {
+                        cases[0]
+                            .2
+                            .push(Clause::new(tests.to_vec(), clause.body.clone()));
+                    }
                     PatKind::Lit(Lit::Bool(b)) => {
                         let idx = if *b { BOOL_TRUE_IDX } else { BOOL_FALSE_IDX };
                         cases[idx]
@@ -442,6 +456,7 @@ impl<'t> DecisionTree<'t> {
 impl Constructor {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
+            Constructor::Unit => arena.text("()"),
             Constructor::Bool(b) => arena.text(b.to_string()),
             Constructor::Ident(id, _) => arena.text(id.to_string()),
         }
