@@ -1,8 +1,11 @@
 use base::{
-    hash::Map,
+    hash::{Map, Set},
     pp::{DocArena, DocBuilder, INDENT, IntoDoc},
 };
-use span::{Ident, Span, Sym};
+use span::{
+    Ident, Span, Sym,
+    diag::{Diagnostic, Label, Level},
+};
 
 use crate::{
     Res, Var,
@@ -94,9 +97,21 @@ use crate::{
 //   - https://compiler.club/compiling-pattern-matching/
 //   - https://github.com/SomewhatML/match-compile/
 
-pub fn compile<'a, 't>(ctxt: &'t TyCtxt<'t>, program: &'a mut Program<'t>) {
+pub fn compile<'a, 't>(
+    ctxt: &'t TyCtxt<'t>,
+    program: &'a mut Program<'t>,
+) -> Result<(), Diagnostic> {
     let mut compiler = MatchCompiler::new(ctxt);
     compiler.visit_program(program);
+
+    if !compiler.errors.is_empty() {
+        // TODO. Support multiple diagnostics in driver.
+        let error = compiler.errors.pop().unwrap();
+
+        return Err(error.into());
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -220,8 +235,30 @@ impl<'a, 't> Matrix<'a, 't> {
     }
 }
 
+enum MatchError {
+    RedundantArms(Span, Vec<Span>),
+}
+
+impl From<MatchError> for Diagnostic {
+    fn from(value: MatchError) -> Self {
+        match value {
+            MatchError::RedundantArms(main_span, arm_spans) => {
+                let mut labels = vec![Label::new(main_span, "").primary()];
+                labels.extend(arm_spans.iter().map(|span| Label::new(*span, "")));
+                Diagnostic::new(Level::Warn)
+                    .with_message("case has redundant arms")
+                    .with_labels(labels)
+            }
+        }
+    }
+}
+
 struct MatchCompiler<'t> {
     ctxt: &'t TyCtxt<'t>,
+
+    reachable: Set<usize>,
+
+    errors: Vec<MatchError>,
 }
 
 impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
@@ -229,6 +266,9 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
         match &mut expr.kind {
             ExprKind::Case(scrutinee, arms, tree) => {
                 assert!(tree.is_none());
+
+                self.reachable.clear();
+
                 let mut var = Var::new(
                     Ident::new(Sym::intern("~case"), scrutinee.span),
                     Res::Local(self.ctxt.new_res_id()),
@@ -245,6 +285,20 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                 println!("{}", tree_.to_doc(&doc_arena).pretty_string(100));
 
                 tree.replace(tree_);
+
+                if !self.reachable.is_empty() {
+                    let mut spans = Vec::new();
+                    for action in 0..arms.len() {
+                        if !self.reachable.contains(&action) {
+                            let (pat, expr) = &arms[action];
+                            let arm_span = pat.span.merge(expr.span);
+                            spans.push(arm_span);
+                        }
+                    }
+                    self.errors
+                        .push(MatchError::RedundantArms(scrutinee.span, spans));
+                    self.reachable.clear();
+                }
             }
             _ => expr.visit_with(self),
         }
@@ -253,7 +307,11 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
 
 impl<'t> MatchCompiler<'t> {
     fn new(ctxt: &'t TyCtxt<'t>) -> Self {
-        Self { ctxt }
+        Self {
+            ctxt,
+            reachable: Set::default(),
+            errors: Vec::new(),
+        }
     }
 
     fn compile_matrix<'a>(&mut self, matrix: &mut Matrix<'a, 't>) -> DecisionTree<'t> {
@@ -285,6 +343,7 @@ impl<'t> MatchCompiler<'t> {
         // If the first clause has no tests, then we have a successful match.
         if matrix.clauses[0].tests.is_empty() {
             let row = matrix.clauses.remove(0);
+            self.reachable.insert(row.body.action);
             return DecisionTree::Leaf(row.body);
         }
 

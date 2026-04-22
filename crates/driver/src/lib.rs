@@ -60,7 +60,7 @@ fn run_passes(
         return Ok(());
     }
 
-    infer::match_compile::compile(&ctxt, &mut hir);
+    infer::match_compile::compile(&ctxt, &mut hir)?;
 
     let mir = mir::lower(&ctxt, &hir);
     let doc_arena = DocArena::default();
