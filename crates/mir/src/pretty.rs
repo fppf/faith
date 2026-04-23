@@ -96,6 +96,7 @@ impl Expr {
                         p.to_doc(arena)
                             .space("=> ")
                             .group()
+                            .append(arena.line())
                             .append(e.to_doc(arena))
                             .nest(2)
                     }),
@@ -138,14 +139,8 @@ impl Pat {
         match self {
             Pat::Var(v) => v.into_doc(arena),
             Pat::Lit(lit) => lit.into_doc(arena),
-            Pat::Tuple(ps) => arena
-                .intersperse(ps.iter().map(|p| p.to_doc(arena)), arena.text(", "))
-                .enclose("(", ")"),
-            Pat::Cons(c, ps) => c.into_doc(arena).append(
-                arena
-                    .intersperse(ps.iter().map(|p| p.to_doc(arena)), arena.text(", "))
-                    .enclose("(", ")"),
-            ),
+            Pat::Tuple(n) => arena.text(format!("(){n}")),
+            Pat::Cons(c) => c.into_doc(arena),
         }
     }
 }

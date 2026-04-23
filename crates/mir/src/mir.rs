@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use base::{hash::Map, index::IndexVec};
+use base::{
+    hash::{Map, Set},
+    index::IndexVec,
+};
 use span::Sym;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -94,12 +97,12 @@ pub struct Join {
     pub body: Box<Expr>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Pat {
     Var(Var),
     Lit(Lit),
-    Tuple(Vec<Pat>),
-    Cons(Var, Vec<Pat>),
+    Tuple(usize),
+    Cons(Var),
 }
 
 #[derive(Clone, Debug)]

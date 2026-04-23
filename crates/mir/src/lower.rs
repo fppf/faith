@@ -14,7 +14,7 @@ pub fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Progr
     LoweringContext::new(ctxt, program).lower()
 }
 
-pub(crate) struct LoweringContext<'a, 't> {
+struct LoweringContext<'a, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'a hir::Program<'t>,
     funcs: Vec<mir::Func>,
@@ -509,33 +509,43 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     })
                 })
             }
-            DecisionTree::Switch(var, cases) => {
+            DecisionTree::Switch(branch_var, cases) => {
+                let branch_var = self.get_var(*branch_var);
+
                 let mut case_arms = Vec::new();
                 for case in cases {
                     let vars: Vec<_> = case
                         .variables
                         .iter()
-                        .map(|&v| {
-                            let v = self.get_or_insert_var(v);
-                            mir::Pat::Var(v)
-                        })
+                        .map(|&v| self.get_or_insert_var(v))
                         .collect();
 
                     let pat = match case.constructor {
                         Constructor::Unit => mir::Pat::Lit(mir::Lit::Unit),
                         Constructor::Bool(b) => mir::Pat::Lit(mir::Lit::Bool(b)),
-                        Constructor::Tuple(_) => mir::Pat::Tuple(vars),
+                        Constructor::Tuple(n) => mir::Pat::Tuple(n),
                         Constructor::Variant(v, _) => {
                             let v = self.get_var(v);
-                            mir::Pat::Cons(v, vars)
+                            mir::Pat::Cons(v)
                         }
                     };
+
                     let expr = self.lower_decision_tree(join_id, &case.tree, arms);
+                    let expr = vars
+                        .into_iter()
+                        .enumerate()
+                        .rev()
+                        .fold(expr, |acc, (i, var)| {
+                            mir::Expr::new(mir::ExprKind::Let {
+                                lhs: var,
+                                rhs: mir::Rhs::Proj(branch_var, i),
+                                body: Box::new(acc),
+                            })
+                        });
                     case_arms.push((pat, expr));
                 }
 
-                let var = self.get_or_insert_var(*var);
-                mir::Expr::new(mir::ExprKind::Case(Value::Var(var), case_arms))
+                mir::Expr::new(mir::ExprKind::Case(Value::Var(branch_var), case_arms))
             }
         }
     }
