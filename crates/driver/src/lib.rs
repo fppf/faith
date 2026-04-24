@@ -62,9 +62,18 @@ fn run_passes(
 
     infer::match_compile::compile(&ctxt, &mut hir)?;
 
-    let mir = mir::lower(&ctxt, &hir);
+    let mut mir = mir::lower(&ctxt, &hir);
     let doc_arena = DocArena::default();
-    println!("{}", mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH));
+    println!(
+        "\nLOWER\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
+
+    mir::shrink(&mut mir);
+    println!(
+        "\nSHRINK\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
 
     Ok(())
 }

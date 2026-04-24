@@ -137,7 +137,6 @@ impl Rhs {
 impl Pat {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
-            Pat::Var(v) => v.into_doc(arena),
             Pat::Lit(lit) => lit.into_doc(arena),
             Pat::Tuple(n) => arena.text(format!("(){n}")),
             Pat::Cons(c) => c.into_doc(arena),

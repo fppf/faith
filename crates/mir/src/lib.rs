@@ -4,10 +4,12 @@ mod closure_convert;
 mod lower;
 mod mir;
 mod pretty;
+mod shrink;
 
 pub use mir::*;
 
 pub use lower::lower;
+pub use shrink::shrink;
 
 // Idea for MIR
 // ------------
