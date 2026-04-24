@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 mod closure_convert;
 mod lower;
 mod mir;

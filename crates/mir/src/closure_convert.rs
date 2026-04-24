@@ -1,3 +1,3 @@
 use crate::Program;
 
-pub fn convert(mir: &mut Program) {}
+pub fn convert(_mir: &mut Program) {}

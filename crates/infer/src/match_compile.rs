@@ -97,10 +97,7 @@ use crate::{
 //   - https://compiler.club/compiling-pattern-matching/
 //   - https://github.com/SomewhatML/match-compile/
 
-pub fn compile<'t>(
-    ctxt: &'t TyCtxt<'t>,
-    program: &mut Program<'t>,
-) -> Result<(), Diagnostic> {
+pub fn compile<'t>(ctxt: &'t TyCtxt<'t>, program: &mut Program<'t>) -> Result<(), Diagnostic> {
     let mut compiler = MatchCompiler::new(ctxt);
     compiler.visit_program(program);
 
@@ -294,9 +291,8 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
 
                 if !self.reachable.is_empty() {
                     let mut spans = Vec::new();
-                    for action in 0..arms.len() {
+                    for (action, (pat, expr)) in arms.iter().enumerate() {
                         if !self.reachable.contains(&action) {
-                            let (pat, expr) = &arms[action];
                             let arm_span = pat.span.merge(expr.span);
                             spans.push(arm_span);
                         }

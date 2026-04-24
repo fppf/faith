@@ -1,11 +1,10 @@
-use std::{
-    fmt,
-    ops::{Deref, DerefMut},
+use std::fmt;
+
+use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
+
+use crate::{
+    Call, ExprId, ExprKind, Func, Join, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
 };
-
-use base::pp::{Doc, DocArena, DocBuilder, INDENT, IntoDoc, PRETTY_WIDTH, Subscript};
-
-use crate::{Call, Expr, ExprKind, Func, Join, JoinId, Lit, Pat, Program, Rhs, Value, Var};
 
 impl fmt::Display for Var {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -59,9 +58,10 @@ impl<'a> IntoDoc<'a> for Value {
     }
 }
 
-impl Expr {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        match &self.kind {
+impl ExprId {
+    pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let expr = &ctxt.exprs[self];
+        match &expr.kind {
             ExprKind::Let { lhs, rhs, body } => arena
                 .text("let")
                 .space(*lhs)
@@ -69,21 +69,21 @@ impl Expr {
                 .space(rhs.to_doc(arena))
                 .space("in")
                 .append(arena.line())
-                .append(body.to_doc(arena)),
+                .append(body.to_doc(ctxt, arena)),
             ExprKind::LetFunc { func, body } => arena
                 .text("let ")
-                .append(func.to_doc(arena).nest(2))
+                .append(func.to_doc(ctxt, arena).nest(2))
                 .append(arena.line())
                 .append("in")
                 .append(arena.line())
-                .append(body.to_doc(arena)),
+                .append(body.to_doc(ctxt, arena)),
             ExprKind::LetJoin { join, body } => arena
                 .text("let ")
-                .append(join.to_doc(arena).nest(2))
+                .append(join.to_doc(ctxt, arena).nest(2))
                 .append(arena.line())
                 .append("in")
                 .append(arena.line())
-                .append(body.to_doc(arena)),
+                .append(body.to_doc(ctxt, arena)),
             ExprKind::Tail(call) => call.to_doc(arena),
             ExprKind::Jump(join_id, vs) => join_id
                 .into_doc(arena)
@@ -97,7 +97,7 @@ impl Expr {
                             .space("=> ")
                             .group()
                             .append(arena.line())
-                            .append(e.to_doc(arena))
+                            .append(e.to_doc(ctxt, arena))
                             .nest(2)
                     }),
                     arena.text(",").append(arena.line()),
@@ -120,7 +120,7 @@ impl Rhs {
         match self {
             Rhs::Value(v) => v.into_doc(arena),
             Rhs::Proj(x, i) => x.into_doc(arena).append(".").append(i.to_string()).group(),
-            Rhs::Cons(var, vs) => todo!(),
+            Rhs::Cons(_var, _vs) => todo!(),
             Rhs::Tuple(vs) => arena
                 .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
                 .enclose("(", ")")
@@ -145,7 +145,7 @@ impl Pat {
 }
 
 impl Func {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+    pub fn to_doc<'a>(&self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena
             .text("fn")
             .space(self.name)
@@ -153,12 +153,12 @@ impl Func {
             .space("=")
             .group()
             .append(arena.line())
-            .append(self.body.to_doc(arena))
+            .append(self.body.to_doc(ctxt, arena))
     }
 }
 
 impl Join {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+    pub fn to_doc<'a>(&self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         arena
             .text("join")
             .space(self.id)
@@ -166,7 +166,7 @@ impl Join {
             .space("=")
             .group()
             .append(arena.line())
-            .append(self.body.to_doc(arena))
+            .append(self.body.to_doc(ctxt, arena))
     }
 }
 
@@ -187,10 +187,10 @@ impl Program {
         let mut doc = arena.empty();
         for func in &self.funcs {
             doc = doc
-                .append(func.to_doc(arena).nest(2))
+                .append(func.to_doc(&self.ctxt, arena).nest(2))
                 .append(arena.line())
                 .append(arena.line());
         }
-        doc.append(self.main.to_doc(arena))
+        doc.append(self.main.to_doc(&self.ctxt, arena))
     }
 }
