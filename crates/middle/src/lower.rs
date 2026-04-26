@@ -1,14 +1,10 @@
 use base::hash::Map;
-use infer::{
-    Res, hir,
-    match_compile::{CompiledCase, Constructor, DecisionTree},
-    ty::TyCtxt,
-};
+use infer::{Res, hir, ty::TyCtxt};
 use span::{Ident, Span, Sym};
 
 use crate::{ExprId, Join, JoinId, MirCtxt, Value, Var, mir};
 
-pub fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
+pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
     LoweringContext::new(ctxt, program).lower()
 }
 
@@ -30,7 +26,7 @@ enum Ctx<'a, 't> {
     Case(
         mir::Var,
         &'a [(hir::Pat<'t>, hir::Expr<'t>)],
-        &'a CompiledCase<'t>,
+        &'a hir::CompiledCase<'t>,
         Box<Ctx<'a, 't>>,
     ),
     List(
@@ -502,15 +498,15 @@ impl<'a, 't> LoweringContext<'a, 't> {
     fn lower_decision_tree(
         &mut self,
         join_id: JoinId,
-        tree: &'a DecisionTree<'t>,
+        tree: &'a hir::DecisionTree<'t>,
         arms: &'a [(hir::Pat<'t>, hir::Expr<'t>)],
     ) -> ExprId {
         match tree {
-            DecisionTree::Fail => {
+            hir::DecisionTree::Fail => {
                 // TODO. handle as diagnostic
                 panic!("fail reached")
             }
-            DecisionTree::Leaf(body) => {
+            hir::DecisionTree::Leaf(body) => {
                 let binds: Vec<_> = body
                     .binds
                     .iter()
@@ -528,7 +524,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     })
                 })
             }
-            DecisionTree::Switch(branch_var, cases) => {
+            hir::DecisionTree::Switch(branch_var, cases) => {
                 let branch_var = self.get_var(*branch_var);
 
                 let mut case_arms = Vec::new();
@@ -539,6 +535,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         .map(|&v| self.get_or_insert_var(v))
                         .collect();
 
+                    use hir::Constructor;
                     let pat = match case.constructor {
                         Constructor::Unit => mir::Pat::Lit(mir::Lit::Unit),
                         Constructor::Bool(b) => mir::Pat::Lit(mir::Lit::Bool(b)),

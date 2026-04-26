@@ -2,7 +2,7 @@ use base::hash::IndexMap;
 
 use crate::{ExprId, ExprKind, Func, Join, MirCtxt, Program, Rhs, Var, free_vars};
 
-pub fn shrink(program: &mut Program) {
+pub(crate) fn shrink(program: &mut Program) {
     let mut shrinker = Shrinker::default();
 
     for func in &program.funcs {

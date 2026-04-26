@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use base::pp::{DocArena, PRETTY_WIDTH};
 use span::diag;
 
 #[derive(PartialEq)]
@@ -42,38 +41,26 @@ fn run_passes(
     should_parse_std: bool,
     stop_after: Pass,
 ) -> Result<(), diag::Diagnostic> {
-    let syntax_arena = syntax::Arena::default();
-    let program = match src {
-        Source::File(path) => syntax::parse_program_in(&syntax_arena, &path, should_parse_std),
-        Source::Str(src) => syntax::parse_str_program_in(&syntax_arena, &src, should_parse_std),
+    let ctxt = infer::ty::TyCtxt::new();
+    let hir = {
+        let syntax_arena = syntax::Arena::default();
+        let program = match src {
+            Source::File(path) => syntax::parse_program_in(&syntax_arena, &path, should_parse_std),
+            Source::Str(src) => syntax::parse_str_program_in(&syntax_arena, &src, should_parse_std),
+        }?;
+
+        if stop_after == Pass::Parse {
+            return Ok(());
+        }
+
+        infer::infer_program_in(&ctxt, program)
     }?;
-
-    if stop_after == Pass::Parse {
-        return Ok(());
-    }
-
-    let ty_arena = infer::ty::Arena::default();
-    let ctxt = infer::ty::TyCtxt::new(&ty_arena);
-    let mut hir = infer::infer_program_in(&ctxt, program)?;
 
     if stop_after == Pass::Infer {
         return Ok(());
     }
 
-    infer::match_compile::compile(&ctxt, &mut hir)?;
-
-    let mut mir = middle::lower(&ctxt, &hir);
-    let doc_arena = DocArena::default();
-    println!(
-        "\nLOWER\n\n{}",
-        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
-    );
-
-    middle::shrink(&mut mir);
-    println!(
-        "\nSHRINK\n\n{}",
-        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
-    );
+    let _mir = middle::lower_and_transform(&ctxt, &hir);
 
     Ok(())
 }

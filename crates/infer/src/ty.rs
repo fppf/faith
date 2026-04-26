@@ -18,16 +18,16 @@ pub use syntax::ast::BaseType;
 base::declare_arena!('t, []);
 
 pub struct TyCtxt<'t> {
-    pub arena: &'t Arena<'t>,
+    pub arena: Arena<'t>,
     pub adts: RefCell<Map<Res, Adt<'t>>>,
     pub cons_to_adt: RefCell<Map<Res, Res>>,
     pub last_res_id: Cell<ResId>,
 }
 
 impl<'t> TyCtxt<'t> {
-    pub fn new(arena: &'t Arena<'t>) -> Self {
+    pub fn new() -> Self {
         Self {
-            arena,
+            arena: Arena::default(),
             adts: RefCell::default(),
             cons_to_adt: RefCell::default(),
             last_res_id: Cell::new(ResId::ZERO + 1),

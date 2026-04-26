@@ -97,7 +97,10 @@ use crate::{
 //   - https://compiler.club/compiling-pattern-matching/
 //   - https://github.com/SomewhatML/match-compile/
 
-pub fn compile<'t>(ctxt: &'t TyCtxt<'t>, program: &mut Program<'t>) -> Result<(), Diagnostic> {
+pub(crate) fn compile<'t>(
+    ctxt: &'t TyCtxt<'t>,
+    program: &mut Program<'t>,
+) -> Result<(), Diagnostic> {
     let mut compiler = MatchCompiler::new(ctxt);
     compiler.visit_program(program);
 
@@ -111,52 +114,14 @@ pub fn compile<'t>(ctxt: &'t TyCtxt<'t>, program: &mut Program<'t>) -> Result<()
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-pub struct CompiledCase<'t> {
-    pub branch_var: Var<'t>,
-    pub tree: DecisionTree<'t>,
-}
-
-#[derive(Clone, Debug)]
-pub enum DecisionTree<'t> {
-    Fail,
-    Leaf(Body<'t>),
-    Switch(Var<'t>, Vec<Case<'t>>),
-}
-
-#[derive(Clone, Debug)]
-pub struct Case<'t> {
-    pub constructor: Constructor<'t>,
-    pub variables: Vec<Var<'t>>,
-    pub tree: DecisionTree<'t>,
-}
-
 impl<'t> Case<'t> {
-    pub fn new(
-        constructor: Constructor<'t>,
-        variables: Vec<Var<'t>>,
-        tree: DecisionTree<'t>,
-    ) -> Self {
+    fn new(constructor: Constructor<'t>, variables: Vec<Var<'t>>, tree: DecisionTree<'t>) -> Self {
         Self {
             constructor,
             variables,
             tree,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Constructor<'t> {
-    Unit,
-    Bool(bool),
-    Tuple(usize),
-    Variant(Var<'t>, usize),
-}
-
-#[derive(Clone, Debug)]
-pub struct Body<'t> {
-    pub binds: Vec<(Var<'t>, Var<'t>)>,
-    pub action: usize,
 }
 
 impl<'t> Body<'t> {

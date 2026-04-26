@@ -11,7 +11,7 @@ use span::{Ident, SourceId, Sp, Span, Sym};
 
 pub use syntax::ast::Lit;
 
-use crate::{Res, match_compile::CompiledCase, ty::Ty};
+use crate::{Res, ty::Ty};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Var<'t> {
@@ -218,6 +218,40 @@ pub enum PatKind<'t> {
     Tuple(Vec<Pat<'t>>),
     Cons(Var<'t>, Vec<Pat<'t>>),
     Or(Vec<Pat<'t>>),
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledCase<'t> {
+    pub branch_var: Var<'t>,
+    pub tree: DecisionTree<'t>,
+}
+
+#[derive(Clone, Debug)]
+pub enum DecisionTree<'t> {
+    Fail,
+    Leaf(Body<'t>),
+    Switch(Var<'t>, Vec<Case<'t>>),
+}
+
+#[derive(Clone, Debug)]
+pub struct Case<'t> {
+    pub constructor: Constructor<'t>,
+    pub variables: Vec<Var<'t>>,
+    pub tree: DecisionTree<'t>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Constructor<'t> {
+    Unit,
+    Bool(bool),
+    Tuple(usize),
+    Variant(Var<'t>, usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct Body<'t> {
+    pub binds: Vec<(Var<'t>, Var<'t>)>,
+    pub action: usize,
 }
 
 pub trait HirVisitor<'t>: Sized {

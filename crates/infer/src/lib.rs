@@ -7,6 +7,7 @@ use span::{Ident, Span, Sym, diag::Diagnostic};
 use syntax::ast;
 
 mod error;
+mod match_compile;
 mod resolve;
 mod substitution;
 mod unify;
@@ -17,7 +18,6 @@ use ty::{Skolem, SkolemId, Ty, TyCtxt, TyKind, TypeFolder, TypeVar};
 use unify::Origin;
 
 pub mod hir;
-pub mod match_compile;
 pub mod ty;
 
 use hir::*;
@@ -27,7 +27,11 @@ pub fn infer_program_in<'ast, 't>(
     program: &'ast ast::Program<'ast>,
 ) -> Result<Program<'t>, Diagnostic> {
     let mut hir = resolve::resolve_program_in(ctxt, program)?;
+
     Infer::new(ctxt).infer(&mut hir).map_err(Diagnostic::from)?;
+
+    match_compile::compile(&ctxt, &mut hir)?;
+
     Ok(hir)
 }
 

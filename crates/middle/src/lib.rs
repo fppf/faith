@@ -4,10 +4,9 @@ mod mir;
 mod pretty;
 mod shrink;
 
-pub use mir::*;
+use base::pp::{DocArena, PRETTY_WIDTH};
 
-pub use lower::lower;
-pub use shrink::shrink;
+pub use mir::*;
 
 // Idea for MIR
 // ------------
@@ -19,3 +18,24 @@ pub use shrink::shrink;
 //   - Linearize expresssions, convert to ANF form
 //   - Desugar surface language constructs, such as sequence (;) to let statement and if to case
 //   - Pattern matches should be compiled to decision trees (nested simple cases)
+
+pub fn lower_and_transform<'t>(
+    ctxt: &'t infer::ty::TyCtxt<'t>,
+    hir: &infer::hir::Program<'t>,
+) -> mir::Program {
+    let mut mir = lower::lower(ctxt, hir);
+
+    let doc_arena = DocArena::default();
+    println!(
+        "\nLOWER\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
+
+    shrink::shrink(&mut mir);
+    println!(
+        "\nSHRINK\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
+
+    mir
+}
