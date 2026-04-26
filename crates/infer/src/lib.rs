@@ -1,6 +1,6 @@
 #![feature(never_type)]
 
-use std::{fmt, marker::PhantomData};
+use std::fmt;
 
 use base::hash::Map;
 use span::{Ident, Span, Sym, diag::Diagnostic};
@@ -31,7 +31,7 @@ pub fn infer_program_in<'ast, 't>(
     Ok(hir)
 }
 
-struct Infer<'a, 't> {
+struct Infer<'t> {
     ctxt: &'t TyCtxt<'t>,
 
     subs: Substitution<'t>,
@@ -42,12 +42,9 @@ struct Infer<'a, 't> {
     unit_ty: Ty<'t>,
 
     skolem: SkolemId,
-
-    // TODO. remove
-    _m: PhantomData<&'a ()>,
 }
 
-impl<'a, 't> Infer<'a, 't> {
+impl<'t> Infer<'t> {
     fn new(ctxt: &'t TyCtxt<'t>) -> Self {
         Self {
             ctxt,
@@ -57,7 +54,6 @@ impl<'a, 't> Infer<'a, 't> {
             bool_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Bool)),
             unit_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Unit)),
             skolem: SkolemId::ZERO,
-            _m: PhantomData,
         }
     }
 

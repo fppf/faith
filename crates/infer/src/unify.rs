@@ -16,7 +16,7 @@ pub enum Origin {
     Vector { vector_span: Span, elem_span: Span },
 }
 
-impl<'t> Infer<'_, 't> {
+impl<'t> Infer<'t> {
     pub fn eq(&mut self, origin: Origin, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), InferError<'t>> {
         log::trace!("[eq] {lhs} ~ {rhs} @ {:?}", origin);
         let lhs = self.instantiate(lhs);
@@ -30,12 +30,12 @@ impl<'t> Infer<'_, 't> {
     }
 }
 
-struct Unifier<'u, 'ast, 't> {
-    infer: &'u mut Infer<'ast, 't>,
+struct Unifier<'u, 't> {
+    infer: &'u mut Infer<'t>,
     origin: Origin,
 }
 
-impl<'t> Unifier<'_, '_, 't> {
+impl<'t> Unifier<'_, 't> {
     fn unify(&mut self, lhs: Ty<'t>, rhs: Ty<'t>) -> Result<(), TypeUnifyError<'t>> {
         log::trace!("  [unify] {lhs} ~ {rhs}");
         let lhs = self.infer.subs.real(lhs);
