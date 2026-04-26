@@ -120,7 +120,14 @@ impl Rhs {
         match self {
             Rhs::Value(v) => v.into_doc(arena),
             Rhs::Proj(x, i) => x.into_doc(arena).append(".").append(i.to_string()).group(),
-            Rhs::Cons(_var, _vs) => todo!(),
+            Rhs::Cons(cons, vs) => cons
+                .into_doc(arena)
+                .append(
+                    arena
+                        .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
+                        .enclose("(", ")"),
+                )
+                .group(),
             Rhs::Tuple(vs) => arena
                 .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
                 .enclose("(", ")")

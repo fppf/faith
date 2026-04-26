@@ -58,6 +58,7 @@ enum Ctx<'a, 't> {
 
 enum ListKind {
     Call,
+    Cons,
     Tuple,
     Vector,
 }
@@ -221,6 +222,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 f,
                 Ctx::List(ListKind::Call, args, 0, Vec::new(), Box::new(ctx)),
             ),
+            ExprKind::Cons(cons, args) => self.lower_var_ctx(
+                *cons,
+                Ctx::List(ListKind::Cons, args, 0, Vec::new(), Box::new(ctx)),
+            ),
             ExprKind::Lambda(lambda) => {
                 let (_, func_var) = self.insert_var("f");
                 let mut args = Vec::with_capacity(lambda.args.len());
@@ -338,6 +343,14 @@ impl<'a, 't> LoweringContext<'a, 't> {
                                 func,
                                 args: args.into(),
                             })
+                        }
+                        ListKind::Cons => {
+                            let (cons, args) = values.split_first().unwrap();
+                            let cons = match cons {
+                                Value::Var(var) => *var,
+                                Value::Lit(_) => panic!("literal in constructor position"),
+                            };
+                            mir::Rhs::Cons(cons, args.into())
                         }
                         ListKind::Tuple => mir::Rhs::Tuple(values),
                         ListKind::Vector => mir::Rhs::Vector(values),

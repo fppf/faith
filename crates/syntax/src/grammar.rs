@@ -305,7 +305,11 @@ fn expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     Ok(Expr::new(
         match kind {
             PathKind::Path(IdentKind::Cons) | PathKind::Ident(IdentKind::Cons) => {
-                ExprKind::Cons(path)
+                let mut args = Vec::new();
+                while !p.at(EOF) && (at_expr_atom(p) || p.at(AT)) {
+                    args.push(expr_atom(p)?);
+                }
+                ExprKind::Cons(path, alloc_iter!(p, args))
             }
             _ => ExprKind::Path(path),
         },

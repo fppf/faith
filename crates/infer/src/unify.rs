@@ -10,6 +10,7 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Origin {
     Generic(Span, Span),
+    ConsArg(Span),
     If(Span),
     Seq(Span),
     Vector { vector_span: Span, elem_span: Span },

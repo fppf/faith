@@ -40,6 +40,7 @@ enum ResolveError {
     DuplicateLocalBinding(Sym, Span, Vec<Span>),
     DuplicateItemBinding(Namespace, Sym, Span, Span),
     RecursiveValue(Sym, Span),
+    ConstructorArity(Sym, Span, usize, usize),
     InvalidInt(Span, std::num::ParseIntError),
 }
 
@@ -70,6 +71,13 @@ impl From<ResolveError> for Diagnostic {
             ResolveError::RecursiveValue(sym, span) => Diagnostic::new(Level::Error)
                 .with_message(format!("definition of `{sym}` produces a recursive value"))
                 .with_labels(vec![Label::new(span, "")]),
+            ResolveError::ConstructorArity(sym, span, expected, actual) => {
+                Diagnostic::new(Level::Error)
+                    .with_message(format!(
+                        "constructor `{sym}` expects {expected} arguments, but received {actual}"
+                    ))
+                    .with_labels(vec![Label::new(span, "")])
+            }
             ResolveError::InvalidInt(span, e) => Diagnostic::new(Level::Error)
                 .with_message("parsed integer is invalid")
                 .with_labels(vec![Label::new(span, e.to_string())]),
@@ -512,7 +520,9 @@ impl<'ast, 't> Resolver<'ast, 't> {
                                 let arity = new_args.len();
                                 let cons_typ =
                                     Ty::n_arrow(self.ctxt, new_args.iter().copied(), adt_typ);
+
                                 let cons_var = self.make_var(id, cons_res, Some(cons_typ));
+
                                 let cons = Constructor {
                                     var: cons_var,
                                     args: self.ctxt.arena.alloc_from_iter(new_args),
@@ -712,9 +722,22 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let var = self.resolve_path(Namespace::Value, p)?;
                 hir::ExprKind::Var(var)
             }
-            ExprKind::Cons(p) => {
+            ExprKind::Cons(p, args) => {
                 let var = self.resolve_path(Namespace::Cons, p)?;
-                hir::ExprKind::Var(var)
+                let new_args = self.resolve_exprs(args)?;
+
+                let cons = self.ctxt.get_constructor(var.res).unwrap();
+                let arity = cons.arity;
+                if arity == new_args.len() {
+                    hir::ExprKind::Cons(var, new_args)
+                } else {
+                    return Err(ResolveError::ConstructorArity(
+                        var.id.sym,
+                        expr.span,
+                        arity,
+                        new_args.len(),
+                    ));
+                }
             }
             ExprKind::Lambda(l) => {
                 self.check_duplicates_many(l.args)?;

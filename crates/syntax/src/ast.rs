@@ -155,7 +155,6 @@ impl<'ast> Expr<'ast> {
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind<'ast> {
     Path(Path<'ast>),
-    Cons(Path<'ast>),
     Lit(Lit),
     Ann(&'ast Expr<'ast>, &'ast Sp<Type<'ast>>),
     Tuple(&'ast [Expr<'ast>]),
@@ -164,6 +163,7 @@ pub enum ExprKind<'ast> {
     If(&'ast Expr<'ast>, &'ast Expr<'ast>, &'ast Expr<'ast>),
     Lambda(Lambda<'ast>),
     Call(&'ast Expr<'ast>, &'ast [Expr<'ast>]),
+    Cons(Path<'ast>, &'ast [Expr<'ast>]),
     Let(&'ast [(Pat<'ast>, Expr<'ast>)], &'ast Expr<'ast>),
     Seq(&'ast Expr<'ast>, &'ast Expr<'ast>),
 }
@@ -268,7 +268,7 @@ impl<'ast> Expr<'ast> {
         V: AstVisitor<'ast>,
     {
         match self.kind {
-            ExprKind::Path(_) | ExprKind::Cons(_) | ExprKind::Lit(_) => (),
+            ExprKind::Path(_) | ExprKind::Lit(_) => (),
             ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) | ExprKind::Vector(exprs) => {
                 exprs.iter().for_each(|expr| v.visit_expr(expr))
@@ -291,6 +291,9 @@ impl<'ast> Expr<'ast> {
             }
             ExprKind::Call(expr, args) => {
                 v.visit_expr(expr);
+                args.iter().for_each(|arg| v.visit_expr(arg));
+            }
+            ExprKind::Cons(_, args) => {
                 args.iter().for_each(|arg| v.visit_expr(arg));
             }
             ExprKind::Let(binds, expr) => {

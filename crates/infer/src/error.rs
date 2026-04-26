@@ -57,6 +57,9 @@ impl<'t> TypeUnifyError<'t> {
                     ]
                 }
             }
+            Origin::ConsArg(span) => {
+                vec![Label::new(span, "constructor argument").primary()]
+            }
             Origin::If(span) => {
                 vec![Label::new(span, "expected a boolean value for if condition").primary()]
             }

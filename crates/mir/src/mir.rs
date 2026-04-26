@@ -91,11 +91,6 @@ impl FreeVars {
             self.bind_var(*var);
         }
         self.expr_vars(ctxt, func.body);
-
-        // Argument variables are only in scope for function body
-        for var in &func.args {
-            self.unbind_var(*var);
-        }
     }
 
     pub fn join_vars(&mut self, ctxt: &MirCtxt, join: &Join) {
@@ -103,11 +98,6 @@ impl FreeVars {
             self.bind_var(*var);
         }
         self.expr_vars(ctxt, join.body);
-
-        // Argument variables are only in scope for join body
-        for var in &join.args {
-            self.unbind_var(*var);
-        }
     }
 
     pub fn expr_vars(&mut self, ctxt: &MirCtxt, expr: ExprId) {
@@ -183,10 +173,6 @@ impl FreeVars {
 
     fn bind_var(&mut self, var: Var) {
         self.bound.insert(var);
-    }
-
-    fn unbind_var(&mut self, var: Var) {
-        self.bound.remove(&var);
     }
 }
 

@@ -77,6 +77,10 @@ impl<'a, 't> Infer<'a, 't> {
                 assert!(var.typ.is_some(), "variable {var} has no type");
                 if let Some(typ) = var.typ.as_mut() {
                     *typ = self.subs.apply(*typ);
+                    assert!(
+                        typ.uni_vars().is_empty(),
+                        "unexpected unification variables in {typ}"
+                    );
                 } else {
                     panic!("variable {var} has no type");
                 }
@@ -85,6 +89,13 @@ impl<'a, 't> Infer<'a, 't> {
             fn visit_expr(&mut self, expr: &mut Expr<'t>) {
                 if let Some(typ) = expr.typ.as_mut() {
                     *typ = self.subs.apply(*typ);
+
+                    // TODO. Make explicit error, disallow
+                    // let-polymorphism
+                    assert!(
+                        typ.uni_vars().is_empty(),
+                        "unexpected unification variables in {typ}"
+                    );
                 } else {
                     panic!("expression {expr:?} has no type");
                 }
@@ -94,6 +105,10 @@ impl<'a, 't> Infer<'a, 't> {
             fn visit_pat(&mut self, pat: &mut Pat<'t>) {
                 if let Some(typ) = pat.typ.as_mut() {
                     *typ = self.subs.apply(*typ);
+                    assert!(
+                        typ.uni_vars().is_empty(),
+                        "unexpected unification variables in {typ}"
+                    );
                 } else {
                     panic!("pattern {pat:?} has no type");
                 }
@@ -300,6 +315,29 @@ impl<'a, 't> Infer<'a, 't> {
                 )?;
                 ret_ty
             }
+            ExprKind::Cons(cons_var, args) => {
+                let cons_typ = cons_var.typ.expect("no type for constructor");
+                println!("Checking {cons_var} with type {cons_typ}");
+
+                let cons = self.ctxt.get_constructor(cons_var.res).unwrap();
+
+                assert_eq!(args.len(), cons.args.len());
+
+                let mut arg_tys = Vec::new();
+                for (arg, expected_arg) in args.iter_mut().zip(cons.args) {
+                    let arg_ty = self.infer_expr(arg)?;
+                    self.eq(Origin::ConsArg(arg.span), arg_ty, *expected_arg)?;
+                    arg_tys.push(arg_ty);
+                }
+
+                let ret_ty = self.fresh_var();
+                self.eq(
+                    Origin::Generic(cons_var.span, Span::dummy()),
+                    Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                    cons_typ,
+                )?;
+                ret_ty
+            }
             ExprKind::Lit(l) => self.type_from_lit(*l),
             ExprKind::Lambda(lambda) => {
                 let arg_tys = self.infer_pats(lambda.args.as_mut())?;
@@ -410,17 +448,31 @@ impl<'a, 't> Infer<'a, 't> {
                 expected
             }
             PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
-            PatKind::Cons(cons, args) => {
-                let cons_ty = cons.typ.unwrap();
+            PatKind::Cons(cons_var, args) => {
+                let cons_typ = cons_var.typ.unwrap();
                 if args.is_empty() {
-                    cons_ty
+                    cons_typ
                 } else {
-                    let arg_tys = self.infer_pats(args)?;
+                    let cons = self.ctxt.get_constructor(cons_var.res).unwrap();
+
+                    assert_eq!(args.len(), cons.args.len());
+
+                    let mut arg_tys = Vec::new();
+                    for (arg, expected_arg) in args.iter_mut().zip(cons.args) {
+                        let arg_ty = self.infer_pat(arg)?;
+                        self.eq(
+                            Origin::Generic(arg.span, Span::dummy()),
+                            arg_ty,
+                            *expected_arg,
+                        )?;
+                        arg_tys.push(arg_ty);
+                    }
+
                     let ret_ty = self.fresh_var();
                     self.eq(
-                        Origin::Generic(pat.span, cons.span),
+                        Origin::Generic(cons_var.span, Span::dummy()),
                         Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
-                        cons_ty,
+                        cons_typ,
                     )?;
                     ret_ty
                 }
