@@ -2,7 +2,7 @@ use base::hash::Map;
 use infer::{Res, hir, ty::TyCtxt};
 use span::{Ident, Span, Sym};
 
-use crate::{ExprId, Join, JoinId, MirCtxt, Value, Var, mir};
+use crate::mir::{self, ExprId, Join, JoinId, MirCtxt, Value, Var};
 
 pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
     LoweringContext::new(ctxt, program).lower()
@@ -11,12 +11,11 @@ pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir
 struct LoweringContext<'a, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'a hir::Program<'t>,
-    funcs: Vec<mir::Func>,
+    funcs: Vec<mir::FuncId>,
     mir_ctxt: MirCtxt,
     res_to_var: Map<Res, Var>,
     var_to_res: Map<Var, Res>,
     temporaries: Map<Ident, Var>,
-    stamp: u32,
 }
 
 enum Ctx<'a, 't> {
@@ -69,14 +68,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             res_to_var: Map::default(),
             var_to_res: Map::default(),
             temporaries: Map::default(),
-            stamp: 1,
         }
-    }
-
-    fn next_stamp(&mut self) -> u32 {
-        let stamp = self.stamp;
-        self.stamp += 1;
-        stamp
     }
 
     fn get_or_insert_var(&mut self, var: hir::Var<'t>) -> mir::Var {
@@ -84,7 +76,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         match self.res_to_var.get(&res) {
             Some(var) => *var,
             None => {
-                let var = mir::Var::new(var.id.sym, self.next_stamp());
+                let var = self.mir_ctxt.new_var(var.id.sym);
                 self.res_to_var.insert(res, var);
                 self.var_to_res.insert(var, res);
                 var
@@ -103,16 +95,11 @@ impl<'a, 't> LoweringContext<'a, 't> {
     }
 
     pub fn insert_var(&mut self, name: &str) -> (hir::Var<'t>, mir::Var) {
-        let mir_var = mir::Var::new(Sym::intern(&format!("~{name}")), self.next_stamp());
+        let mir_var = self.mir_ctxt.new_var(Sym::intern(&format!("~{name}")));
         let id = Ident::new(mir_var.sym, Span::dummy());
         let hir_var = hir::Var::new(id, Res::dummy(), id.span);
         self.temporaries.insert(id, mir_var);
-        let _expr = hir::Expr::new(hir::ExprKind::Var(hir_var), Span::dummy(), None);
         (hir_var, mir_var)
-    }
-
-    fn new_expr(&mut self, kind: mir::ExprKind) -> ExprId {
-        self.mir_ctxt.exprs.insert(mir::Expr::new(kind))
     }
 
     fn lower(mut self) -> mir::Program {
@@ -148,12 +135,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 } => {
                     let name = self.get_or_insert_var(*var);
                     let body = self.lower_expr(expr);
-                    let func = mir::Func {
+                    let func = self.mir_ctxt.new_func(mir::Func {
                         name,
                         args: vec![],
                         body,
                         recursive: *recursive,
-                    };
+                    });
                     self.funcs.push(func);
                 }
             }
@@ -248,7 +235,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 };
 
                 let let_body = self.lower_expr_ret(Value::Var(func_var), ctx);
-                self.new_expr(mir::ExprKind::LetFunc {
+                let func = self.mir_ctxt.new_func(func);
+                self.mir_ctxt.new_expr(mir::ExprKind::LetFunc {
                     func,
                     body: let_body,
                 })
@@ -287,10 +275,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
 
     fn lower_expr_ret(&mut self, value: Value, ctx: Ctx<'a, 't>) -> ExprId {
         match ctx {
-            Ctx::Ret => self.new_expr(mir::ExprKind::Return(value)),
-            Ctx::Jump(join_id) => self.new_expr(mir::ExprKind::Jump(join_id, vec![value])),
+            Ctx::Ret => self.mir_ctxt.new_expr(mir::ExprKind::Return(value)),
+            Ctx::Jump(join_id) => self
+                .mir_ctxt
+                .new_expr(mir::ExprKind::Jump(join_id, vec![value])),
             Ctx::If(e1, e2, ctx) => {
-                let join_id = JoinId(self.next_stamp());
+                let join_id = self.mir_ctxt.new_join_id();
                 let (_, join_arg) = self.insert_var("p");
                 let join = Join {
                     id: join_id,
@@ -299,17 +289,18 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 };
                 let e1 = self.lower_expr_ctx(e1, Ctx::Jump(join_id));
                 let e2 = self.lower_expr_ctx(e2, Ctx::Jump(join_id));
-                let body = self.new_expr(mir::ExprKind::Case(
+                let body = self.mir_ctxt.new_expr(mir::ExprKind::Case(
                     value,
                     vec![
                         (mir::Pat::Lit(mir::Lit::Bool(true)), e1),
                         (mir::Pat::Lit(mir::Lit::Bool(false)), e2),
                     ],
                 ));
-                self.new_expr(mir::ExprKind::LetJoin { join, body })
+                self.mir_ctxt
+                    .new_expr(mir::ExprKind::LetJoin { join, body })
             }
             Ctx::Case(_branch_var, arms, compiled, ctx) => {
-                let join_id = JoinId(self.next_stamp());
+                let join_id = self.mir_ctxt.new_join_id();
                 let (_, join_arg) = self.insert_var("p");
                 let join = Join {
                     id: join_id,
@@ -317,8 +308,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     body: self.lower_expr_ret(Value::Var(join_arg), *ctx),
                 };
                 let tree = self.lower_decision_tree(join_id, &compiled.tree, arms);
-                let let_join = self.new_expr(mir::ExprKind::LetJoin { join, body: tree });
-                self.new_expr(mir::ExprKind::Let {
+                let let_join = self
+                    .mir_ctxt
+                    .new_expr(mir::ExprKind::LetJoin { join, body: tree });
+                self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: self.get_var(compiled.branch_var),
                     rhs: mir::Rhs::Value(value),
                     body: let_join,
@@ -335,10 +328,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
                                 Value::Var(var) => *var,
                                 Value::Lit(_) => panic!("literal in function position"),
                             };
-                            mir::Rhs::Call(mir::Call {
+                            mir::Rhs::Call(self.mir_ctxt.new_call(mir::Call {
                                 func,
                                 args: args.into(),
-                            })
+                            }))
                         }
                         ListKind::Cons => {
                             let (cons, args) = values.split_first().unwrap();
@@ -353,7 +346,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     };
 
                     let body = self.lower_expr_ret(Value::Var(tmp), *ctx);
-                    self.new_expr(mir::ExprKind::Let {
+                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
                         lhs: tmp,
                         rhs,
                         body,
@@ -387,7 +380,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         .into_iter()
                         .rev()
                         .fold(body, |acc, (lhs, rhs, i)| {
-                            self.new_expr(mir::ExprKind::Let {
+                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
                                 lhs,
                                 rhs: if i > 0 {
                                     mir::Rhs::Proj(rhs, i - 1)
@@ -398,7 +391,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                             })
                         })
                 };
-                self.new_expr(mir::ExprKind::Let {
+                self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: tmp,
                     rhs: mir::Rhs::Value(value),
                     body,
@@ -427,7 +420,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         .into_iter()
                         .rev()
                         .fold(body, |acc, (lhs, rhs, i)| {
-                            self.new_expr(mir::ExprKind::Let {
+                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
                                 lhs,
                                 rhs: if i > 0 {
                                     mir::Rhs::Proj(rhs, i - 1)
@@ -438,7 +431,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                             })
                         })
                 };
-                self.new_expr(mir::ExprKind::Let {
+                self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: tmp,
                     rhs: mir::Rhs::Value(value),
                     body,
@@ -447,7 +440,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             Ctx::Seq(e2, ctx) => {
                 let (_, unused) = self.insert_var("seq");
                 let e2 = self.lower_expr_ctx(e2, *ctx);
-                self.new_expr(mir::ExprKind::Let {
+                self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: unused,
                     rhs: mir::Rhs::Value(value),
                     body: e2,
@@ -517,7 +510,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 let body = self.lower_expr_ctx(action, Ctx::Jump(join_id));
 
                 binds.into_iter().rev().fold(body, |acc, (lhs, rhs)| {
-                    self.new_expr(mir::ExprKind::Let {
+                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
                         lhs,
                         rhs: mir::Rhs::Value(Value::Var(rhs)),
                         body: acc,
@@ -552,7 +545,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         .enumerate()
                         .rev()
                         .fold(expr, |acc, (i, var)| {
-                            self.new_expr(mir::ExprKind::Let {
+                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
                                 lhs: var,
                                 rhs: mir::Rhs::Proj(branch_var, i),
                                 body: acc,
@@ -561,7 +554,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     case_arms.push((pat, expr));
                 }
 
-                self.new_expr(mir::ExprKind::Case(Value::Var(branch_var), case_arms))
+                self.mir_ctxt
+                    .new_expr(mir::ExprKind::Case(Value::Var(branch_var), case_arms))
             }
         }
     }

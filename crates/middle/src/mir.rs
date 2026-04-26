@@ -1,7 +1,7 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
-use base::hash::{Map, Set};
-use slotmap::{SlotMap, new_key_type};
+use base::hash::{IndexSet, Set};
+use slotmap::{KeyData, SlotMap, new_key_type};
 use span::Sym;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -11,7 +11,7 @@ pub struct Var {
 }
 
 impl Var {
-    pub fn new(sym: Sym, stamp: u32) -> Self {
+    fn new(sym: Sym, stamp: u32) -> Self {
         Self { sym, stamp }
     }
 }
@@ -27,17 +27,49 @@ pub enum TyKind {
     Arrow(Vec<Ty>, Ty),
 }
 
+new_key_type! { pub struct FuncId; }
 new_key_type! { pub struct ExprId; }
+new_key_type! { pub struct CallId; }
 
 #[derive(Default, Debug)]
 pub struct MirCtxt {
+    pub funcs: SlotMap<FuncId, Func>,
     pub exprs: SlotMap<ExprId, Expr>,
+    pub calls: SlotMap<CallId, Call>,
+    var_counter: Cell<u32>,
+    join_counter: Cell<u32>,
+}
+
+impl MirCtxt {
+    pub fn new_func(&mut self, func: Func) -> FuncId {
+        self.funcs.insert(func)
+    }
+
+    pub fn new_expr(&mut self, kind: ExprKind) -> ExprId {
+        self.exprs.insert(Expr::new(kind))
+    }
+
+    pub fn new_call(&mut self, call: Call) -> CallId {
+        self.calls.insert(call)
+    }
+
+    pub fn new_var(&self, sym: Sym) -> Var {
+        let stamp = self.var_counter.get();
+        self.var_counter.update(|c| c + 1);
+        Var::new(sym, stamp)
+    }
+
+    pub fn new_join_id(&self) -> JoinId {
+        let id = self.join_counter.get();
+        self.join_counter.update(|c| c + 1);
+        JoinId(id)
+    }
 }
 
 #[derive(Debug)]
 pub struct Program {
     pub ctxt: MirCtxt,
-    pub funcs: Vec<Func>,
+    pub funcs: Vec<FuncId>,
     pub main: ExprId,
 }
 
@@ -48,12 +80,14 @@ pub struct Expr {
 }
 
 impl Expr {
-    pub fn new(kind: ExprKind) -> Self {
+    pub(crate) const SENTINEL: Self = Expr::new(ExprKind::Return(Value::Lit(Lit::Unit)));
+
+    pub const fn new(kind: ExprKind) -> Self {
         Self { kind }
     }
 }
 
-pub fn free_vars(ctxt: &MirCtxt, expr_id: ExprId) -> Set<Var> {
+pub fn free_vars(ctxt: &MirCtxt, expr_id: ExprId) -> IndexSet<Var> {
     let mut fv = FreeVars::default();
     fv.expr_vars(ctxt, expr_id);
     fv.vars
@@ -64,11 +98,11 @@ pub enum ExprKind {
     // let lhs = rhs in body
     Let { lhs: Var, rhs: Rhs, body: ExprId },
     // let func in body
-    LetFunc { func: Func, body: ExprId },
+    LetFunc { func: FuncId, body: ExprId },
     // let join in body
     LetJoin { join: Join, body: ExprId },
     // tail call
-    Tail(Call),
+    Tail(CallId),
     // jump(id, v1, ..., vn)
     Jump(JoinId, Vec<Value>),
     // return(v)
@@ -80,11 +114,13 @@ pub enum ExprKind {
 #[derive(Default)]
 pub struct FreeVars {
     pub bound: Set<Var>,
-    pub vars: Set<Var>,
+    pub vars: IndexSet<Var>,
 }
 
 impl FreeVars {
-    pub fn func_vars(&mut self, ctxt: &MirCtxt, func: &Func) {
+    pub fn func_vars(&mut self, ctxt: &MirCtxt, func_id: FuncId) {
+        let func = &ctxt.funcs[func_id];
+
         self.bind_var(func.name);
 
         for var in &func.args {
@@ -105,18 +141,18 @@ impl FreeVars {
         match &expr.kind {
             ExprKind::Let { lhs, rhs, body } => {
                 self.bind_var(*lhs);
-                self.rhs_vars(rhs);
+                self.rhs_vars(ctxt, rhs);
                 self.expr_vars(ctxt, *body);
             }
             ExprKind::LetFunc { func, body } => {
-                self.func_vars(ctxt, func);
+                self.func_vars(ctxt, *func);
                 self.expr_vars(ctxt, *body);
             }
             ExprKind::LetJoin { join, body } => {
                 self.join_vars(ctxt, join);
                 self.expr_vars(ctxt, *body);
             }
-            ExprKind::Tail(call) => self.call_vars(call),
+            ExprKind::Tail(call) => self.call_vars(ctxt, *call),
             ExprKind::Jump(_, vals) => {
                 for val in vals {
                     self.value_vars(val);
@@ -132,7 +168,8 @@ impl FreeVars {
         }
     }
 
-    fn call_vars(&mut self, call: &Call) {
+    fn call_vars(&mut self, ctxt: &MirCtxt, call_id: CallId) {
+        let call = &ctxt.calls[call_id];
         self.add_var(call.func);
         for val in &call.args {
             self.value_vars(val);
@@ -146,7 +183,7 @@ impl FreeVars {
         }
     }
 
-    fn rhs_vars(&mut self, rhs: &Rhs) {
+    fn rhs_vars(&mut self, ctxt: &MirCtxt, rhs: &Rhs) {
         match rhs {
             Rhs::Value(val) => self.value_vars(val),
             Rhs::Proj(v, _) => self.add_var(*v),
@@ -161,7 +198,7 @@ impl FreeVars {
                     self.value_vars(val);
                 }
             }
-            Rhs::Call(call) => self.call_vars(call),
+            Rhs::Call(call) => self.call_vars(ctxt, *call),
         }
     }
 
@@ -185,15 +222,6 @@ pub enum Value {
     Lit(Lit),
 }
 
-impl Value {
-    pub fn walk<V: MirVisitor>(&mut self, visit: &mut V) {
-        match self {
-            Value::Var(var) => visit.visit_var(var),
-            Value::Lit(_) => (),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Rhs {
     Value(Value),
@@ -201,28 +229,7 @@ pub enum Rhs {
     Cons(Var, Vec<Value>),
     Tuple(Vec<Value>),
     Vector(Vec<Value>),
-    Call(Call),
-}
-
-impl Rhs {
-    pub fn walk<V: MirVisitor>(&mut self, visit: &mut V) {
-        match self {
-            Rhs::Value(val) => visit.visit_value(val),
-            Rhs::Proj(var, _) => visit.visit_var(var),
-            Rhs::Cons(var, vals) => {
-                visit.visit_var(var);
-                for val in vals {
-                    visit.visit_value(val);
-                }
-            }
-            Rhs::Tuple(vals) | Rhs::Vector(vals) => {
-                for val in vals {
-                    visit.visit_value(val);
-                }
-            }
-            Rhs::Call(call) => visit.visit_call(call),
-        }
-    }
+    Call(CallId),
 }
 
 #[derive(Clone, Debug)]
@@ -232,10 +239,10 @@ pub struct Call {
 }
 
 impl Call {
-    pub fn walk<V: MirVisitor>(&mut self, visit: &mut V) {
-        visit.visit_var(&mut self.func);
-        for val in &mut self.args {
-            visit.visit_value(val);
+    pub(crate) fn sentinel() -> Self {
+        Self {
+            func: Var::new(Sym::intern("~"), 0),
+            args: Vec::new(),
         }
     }
 }
@@ -247,30 +254,11 @@ pub struct Join {
     pub body: ExprId,
 }
 
-impl Join {
-    pub fn walk<V: MirVisitor>(&mut self, ctxt: &mut MirCtxt, visit: &mut V) {
-        for var in &mut self.args {
-            visit.visit_var(var);
-        }
-        visit.visit_expr(ctxt, self.body);
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum Pat {
     Lit(Lit),
     Tuple(usize),
     Cons(Var),
-}
-
-impl Pat {
-    pub fn walk<V: MirVisitor>(&mut self, visit: &mut V) {
-        match self {
-            Pat::Lit(_) => (),
-            Pat::Tuple(_) => (),
-            Pat::Cons(var) => visit.visit_var(var),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -282,19 +270,14 @@ pub struct Func {
 }
 
 impl Func {
-    pub fn walk<V: MirVisitor>(&mut self, ctxt: &mut MirCtxt, visit: &mut V) {
-        visit.visit_var(&mut self.name);
-        for var in &mut self.args {
-            visit.visit_var(var);
+    pub(crate) fn sentinel() -> Self {
+        Self {
+            name: Var::new(Sym::intern("~"), 0),
+            args: Vec::new(),
+            body: ExprId(KeyData::default()),
+            recursive: false,
         }
-        visit.visit_expr(ctxt, self.body);
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct Closure {
-    pub env: Map<Var, Value>,
-    pub func: Func,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -304,44 +287,4 @@ pub enum Lit {
     Bool(bool),
     Int32(i32),
     Str(Sym),
-}
-
-pub trait MirVisitor: Sized {
-    fn visit_program(&mut self, program: &mut Program) {
-        let ctxt = &mut program.ctxt;
-        for func in &mut program.funcs {
-            self.visit_func(ctxt, func);
-        }
-        self.visit_expr(ctxt, program.main);
-    }
-
-    fn visit_func(&mut self, ctxt: &mut MirCtxt, func: &mut Func) {
-        func.walk(ctxt, self);
-    }
-
-    fn visit_join(&mut self, ctxt: &mut MirCtxt, join: &mut Join) {
-        join.walk(ctxt, self);
-    }
-
-    fn visit_expr(&mut self, _ctxt: &mut MirCtxt, _expr_id: ExprId) {
-        //
-    }
-
-    fn visit_rhs(&mut self, rhs: &mut Rhs) {
-        rhs.walk(self);
-    }
-
-    fn visit_call(&mut self, call: &mut Call) {
-        call.walk(self);
-    }
-
-    fn visit_value(&mut self, value: &mut Value) {
-        value.walk(self);
-    }
-
-    fn visit_pat(&mut self, pat: &mut Pat) {
-        pat.walk(self);
-    }
-
-    fn visit_var(&mut self, _var: &mut Var) {}
 }

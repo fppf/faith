@@ -1,12 +1,12 @@
 use base::hash::IndexMap;
 
-use crate::{ExprId, ExprKind, Func, Join, MirCtxt, Program, Rhs, Var, free_vars};
+use crate::mir::{ExprId, ExprKind, FuncId, Join, MirCtxt, Program, Rhs, Var, free_vars};
 
 pub(crate) fn shrink(program: &mut Program) {
     let mut shrinker = Shrinker::default();
 
     for func in &program.funcs {
-        shrinker.shrink_func(&program.ctxt, func);
+        shrinker.shrink_func(&program.ctxt, *func);
     }
     shrinker.shrink_expr(&program.ctxt, program.main);
 
@@ -23,11 +23,12 @@ impl Shrinker {
         for (from, to) in self.replacements {
             log::trace!("replace {from:?} with {to:?}");
             let replace_expr = program.ctxt.exprs.remove(to).unwrap();
-            let _ = std::mem::replace(&mut program.ctxt.exprs[from], replace_expr);
+            program.ctxt.exprs[from] = replace_expr;
         }
     }
 
-    fn shrink_func(&mut self, ctxt: &MirCtxt, func: &Func) {
+    fn shrink_func(&mut self, ctxt: &MirCtxt, func_id: FuncId) {
+        let func = &ctxt.funcs[func_id];
         self.shrink_expr(ctxt, func.body);
     }
 
@@ -41,7 +42,7 @@ impl Shrinker {
         match &expr.kind {
             ExprKind::Let { body, .. } => self.shrink_expr(ctxt, *body),
             ExprKind::LetFunc { func, body } => {
-                self.shrink_func(ctxt, func);
+                self.shrink_func(ctxt, *func);
                 self.shrink_expr(ctxt, *body);
             }
             ExprKind::LetJoin { join, body } => {
@@ -62,6 +63,7 @@ impl Shrinker {
                 self.try_replace(ctxt, *lhs, expr_id, *body);
             }
             ExprKind::LetFunc { func, body } => {
+                let func = &ctxt.funcs[*func];
                 self.try_replace(ctxt, func.name, expr_id, *body);
             }
             _ => (),

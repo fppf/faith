@@ -1,12 +1,11 @@
 mod closure_convert;
 mod lower;
-mod mir;
 mod pretty;
 mod shrink;
 
-use base::pp::{DocArena, PRETTY_WIDTH};
+pub mod mir;
 
-pub use mir::*;
+use base::pp::{DocArena, PRETTY_WIDTH};
 
 // Idea for MIR
 // ------------

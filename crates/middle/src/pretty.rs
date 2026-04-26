@@ -2,8 +2,8 @@ use std::fmt;
 
 use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
 
-use crate::{
-    Call, ExprId, ExprKind, Func, Join, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
+use crate::mir::{
+    CallId, ExprId, ExprKind, FuncId, Join, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
 };
 
 impl fmt::Display for Var {
@@ -66,7 +66,7 @@ impl ExprId {
                 .text("let")
                 .space(*lhs)
                 .space("=")
-                .space(rhs.to_doc(arena))
+                .space(rhs.to_doc(ctxt, arena))
                 .space("in")
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
@@ -84,7 +84,7 @@ impl ExprId {
                 .append("in")
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
-            ExprKind::Tail(call) => call.to_doc(arena),
+            ExprKind::Tail(call) => call.to_doc(ctxt, arena),
             ExprKind::Jump(join_id, vs) => join_id
                 .into_doc(arena)
                 .space(arena.intersperse(vs.iter().copied(), arena.space()))
@@ -116,7 +116,7 @@ impl ExprId {
 }
 
 impl Rhs {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+    pub fn to_doc<'a>(&self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         match self {
             Rhs::Value(v) => v.into_doc(arena),
             Rhs::Proj(x, i) => x.into_doc(arena).append(".").append(i.to_string()).group(),
@@ -136,7 +136,7 @@ impl Rhs {
                 .intersperse(vs.iter().map(|v| v.into_doc(arena)), arena.text(", "))
                 .enclose("[", "]")
                 .group(),
-            Rhs::Call(call) => call.to_doc(arena),
+            Rhs::Call(call) => call.to_doc(ctxt, arena),
         }
     }
 }
@@ -151,16 +151,17 @@ impl Pat {
     }
 }
 
-impl Func {
-    pub fn to_doc<'a>(&self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl FuncId {
+    pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let func = &ctxt.funcs[self];
         arena
             .text("fn")
-            .space(self.name)
-            .space(arena.intersperse(self.args.iter().copied(), arena.space()))
+            .space(func.name)
+            .space(arena.intersperse(func.args.iter().copied(), arena.space()))
             .space("=")
             .group()
             .append(arena.line())
-            .append(self.body.to_doc(ctxt, arena))
+            .append(func.body.to_doc(ctxt, arena))
     }
 }
 
@@ -177,12 +178,13 @@ impl Join {
     }
 }
 
-impl Call {
-    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        self.func
+impl CallId {
+    pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let call = &ctxt.calls[self];
+        call.func
             .into_doc(arena)
             .space(arena.intersperse(
-                self.args.iter().map(|arg| arg.into_doc(arena)),
+                call.args.iter().map(|arg| arg.into_doc(arena)),
                 arena.space(),
             ))
             .group()
