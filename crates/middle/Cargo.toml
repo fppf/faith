@@ -1,5 +1,5 @@
 [package]
-name = "mir"
+name = "middle"
 version = "0.0.0"
 edition = "2024"
 authors = ["ryn <ryn@fppf.site>"]
