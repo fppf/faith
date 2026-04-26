@@ -4,6 +4,7 @@ use base::hash::Map;
 use span::{Ident, SourceId, Sp, Span, Sym};
 
 base::newtype_index! {
+    // FIXME. Currently not queried outside of this crate.
     pub struct AstId {}
 }
 

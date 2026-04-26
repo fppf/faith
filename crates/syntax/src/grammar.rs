@@ -306,7 +306,7 @@ fn expr_path<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
         match kind {
             PathKind::Path(IdentKind::Cons) | PathKind::Ident(IdentKind::Cons) => {
                 let mut args = Vec::new();
-                while !p.at(EOF) && (at_expr_atom(p) || p.at(AT)) {
+                while !p.at(EOF) && at_expr_atom(p) {
                     args.push(expr_atom(p)?);
                 }
                 ExprKind::Cons(path, alloc_iter!(p, args))
@@ -507,7 +507,7 @@ fn expr_app<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     let head = expr_atom(p)?;
     let mut args = Vec::new();
-    while !p.at(EOF) && (at_expr_atom(p) || p.at(AT)) {
+    while !p.at(EOF) && at_expr_atom(p) {
         args.push(expr_atom(p)?);
     }
     if args.is_empty() {
@@ -545,11 +545,11 @@ fn infix_op<'ast>(p: &mut Parser<'ast>) -> Option<((u8, u8), Expr<'ast>)> {
     };
     let bp: (u8, u8) = match c {
         '=' | '<' | '>' | '|' | '&' => (1, 2),
-        '^' => (3, 4),
+        '@' | '^' => (3, 4),
         '+' | '-' => (5, 6),
         '*' | '/' => (7, 8),
         ':' => (2, 1),
-        _ => unreachable!(),
+        _ => unreachable!("cannot compute binary precedence of {c}"),
     };
     let op = Expr::new(
         ExprKind::Path(Path::new(id, &[], p.current().span, p.next_ast_id())),

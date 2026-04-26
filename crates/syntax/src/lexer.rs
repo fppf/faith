@@ -130,7 +130,6 @@ impl<'a> Lexer<'a> {
                 }
                 _ => EQUAL,
             },
-            '@' => AT,
             '|' => match self.peek() {
                 Some(&c) if is_infix(c) => {
                     self.take_while(is_infix);
@@ -206,29 +205,19 @@ impl<'a> Lexer<'a> {
     fn keyword(&self, raw: &str) -> Option<TokenKind> {
         Some(match raw {
             "and" => KW_AND,
-            "as" => KW_AS,
             "case" => KW_CASE,
             "else" => KW_ELSE,
-            "end" => KW_END,
             "external" => KW_EXTERNAL,
-            "forall" => KW_FORALL,
             "if" => KW_IF,
             "import" => KW_IMPORT,
-            "include" => KW_INCLUDE,
             "in" => KW_IN,
-            "is" => KW_IS,
             "let" => KW_LET,
             "main" => KW_MAIN,
             "mod" => KW_MOD,
-            "open" => KW_OPEN,
             "of" => KW_OF,
             "then" => KW_THEN,
             "type" => KW_TYPE,
-            "sig" => KW_SIG,
-            "struct" => KW_STRUCT,
-            "use" => KW_USE,
             "val" => KW_VAL,
-            "with" => KW_WITH,
             "true" => LIT(LitToken::Bool(true)),
             "false" => LIT(LitToken::Bool(false)),
             _ => return None,
