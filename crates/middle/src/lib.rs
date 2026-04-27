@@ -36,5 +36,11 @@ pub fn lower_and_transform<'t>(
         mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
     );
 
+    closure_convert::convert(&mut mir);
+    println!(
+        "\nCLOSURE\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
+
     mir
 }

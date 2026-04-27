@@ -324,12 +324,13 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     let rhs = match kind {
                         ListKind::Call => {
                             let (func, args) = values.split_first().unwrap();
-                            let func = match func {
+                            let func_var = match func {
                                 Value::Var(var) => *var,
                                 Value::Lit(_) => panic!("literal in function position"),
+                                Value::Ptr(_) => unreachable!(),
                             };
                             mir::Rhs::Call(self.mir_ctxt.new_call(mir::Call {
-                                func,
+                                func_var,
                                 args: args.into(),
                             }))
                         }
@@ -338,6 +339,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                             let cons = match cons {
                                 Value::Var(var) => *var,
                                 Value::Lit(_) => panic!("literal in constructor position"),
+                                Value::Ptr(_) => unreachable!(),
                             };
                             mir::Rhs::Cons(cons, args.into())
                         }

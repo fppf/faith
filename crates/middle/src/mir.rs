@@ -170,7 +170,7 @@ impl FreeVars {
 
     fn call_vars(&mut self, ctxt: &MirCtxt, call_id: CallId) {
         let call = &ctxt.calls[call_id];
-        self.add_var(call.func);
+        self.add_var(call.func_var);
         for val in &call.args {
             self.value_vars(val);
         }
@@ -180,6 +180,7 @@ impl FreeVars {
         match value {
             Value::Var(var) => self.add_var(*var),
             Value::Lit(_) => (),
+            Value::Ptr(_) => (),
         }
     }
 
@@ -220,6 +221,7 @@ pub struct JoinId(pub u32);
 pub enum Value {
     Var(Var),
     Lit(Lit),
+    Ptr(Var),
 }
 
 #[derive(Clone, Debug)]
@@ -234,17 +236,8 @@ pub enum Rhs {
 
 #[derive(Clone, Debug)]
 pub struct Call {
-    pub func: Var,
+    pub func_var: Var,
     pub args: Vec<Value>,
-}
-
-impl Call {
-    pub(crate) fn sentinel() -> Self {
-        Self {
-            func: Var::new(Sym::intern("~"), 0),
-            args: Vec::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

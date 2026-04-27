@@ -54,6 +54,7 @@ impl<'a> IntoDoc<'a> for Value {
         match self {
             Value::Var(x) => x.into_doc(arena),
             Value::Lit(l) => l.into_doc(arena),
+            Value::Ptr(f) => arena.text("*").append(f.into_doc(arena)),
         }
     }
 }
@@ -181,7 +182,7 @@ impl Join {
 impl CallId {
     pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         let call = &ctxt.calls[self];
-        call.func
+        call.func_var
             .into_doc(arena)
             .space(arena.intersperse(
                 call.args.iter().map(|arg| arg.into_doc(arena)),
