@@ -11,10 +11,14 @@ pub(crate) fn convert(program: &mut Program) {
         converter.convert_func(&mut program.ctxt, *func, None);
     }
     converter.convert_expr(&mut program.ctxt, program.main);
+
+    program.funcs.extend(converter.hoisted);
 }
 
 #[derive(Default)]
-struct ClosureConvert {}
+struct ClosureConvert {
+    hoisted: Vec<FuncId>,
+}
 
 impl ClosureConvert {
     fn convert_func(&mut self, ctxt: &mut MirCtxt, func_id: FuncId, in_body: Option<ExprId>) {
@@ -68,6 +72,8 @@ impl ClosureConvert {
         self.convert_expr(ctxt, func.body);
 
         ctxt.funcs[func_id] = func;
+
+        self.hoisted.push(func_id);
     }
 
     fn convert_expr(&mut self, ctxt: &mut MirCtxt, expr_id: ExprId) {
