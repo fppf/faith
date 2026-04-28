@@ -7,6 +7,8 @@ pub mod mir;
 
 use base::pp::{DocArena, PRETTY_WIDTH};
 
+use crate::mir::Program;
+
 // Idea for MIR
 // ------------
 // After typechecking of HIR, we want a smaller (still-typed) language
@@ -18,29 +20,29 @@ use base::pp::{DocArena, PRETTY_WIDTH};
 //   - Desugar surface language constructs, such as sequence (;) to let statement and if to case
 //   - Pattern matches should be compiled to decision trees (nested simple cases)
 
+fn log_mir(pass: &'static str, mir: &Program) {
+    let doc_arena = DocArena::default();
+    log::trace!(
+        "\n{pass}\n\n{}",
+        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
+    );
+}
+
 pub fn lower_and_transform<'t>(
     ctxt: &'t infer::ty::TyCtxt<'t>,
     hir: &infer::hir::Program<'t>,
 ) -> mir::Program {
     let mut mir = lower::lower(ctxt, hir);
-
-    let doc_arena = DocArena::default();
-    println!(
-        "\nLOWER\n\n{}",
-        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
-    );
+    log_mir("LOWER", &mir);
 
     shrink::shrink(&mut mir);
-    println!(
-        "\nSHRINK\n\n{}",
-        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
-    );
+    log_mir("SHRINK", &mir);
 
     closure_convert::convert(&mut mir);
-    println!(
-        "\nCLOSURE\n\n{}",
-        mir.to_doc(&doc_arena).pretty_string(PRETTY_WIDTH)
-    );
+    log_mir("CLOSURE", &mir);
+
+    shrink::shrink(&mut mir);
+    log_mir("SHRINK", &mir);
 
     mir
 }

@@ -317,7 +317,7 @@ impl<'t> Infer<'t> {
             }
             ExprKind::Cons(cons_var, args) => {
                 let cons_typ = cons_var.typ.expect("no type for constructor");
-                println!("Checking {cons_var} with type {cons_typ}");
+                log::trace!("Checking {cons_var} with type {cons_typ}");
 
                 let cons = self.ctxt.get_constructor(cons_var.res).unwrap();
 

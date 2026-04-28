@@ -252,7 +252,7 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                 let tree = self.compile_matrix(&mut matrix);
 
                 let doc_arena = DocArena::default();
-                println!("{}", tree.to_doc(&doc_arena).pretty_string(100));
+                log::trace!("{}", tree.to_doc(&doc_arena).pretty_string(100));
 
                 if !self.reachable.is_empty() {
                     let mut spans = Vec::new();
