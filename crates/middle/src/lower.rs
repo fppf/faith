@@ -1,4 +1,4 @@
-use base::hash::Map;
+use base::hash::{IndexSet, Map};
 use infer::{Res, hir, ty::TyCtxt};
 use span::{Ident, Span, Sym};
 
@@ -11,7 +11,7 @@ pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir
 struct LoweringContext<'a, 't> {
     ctxt: &'t TyCtxt<'t>,
     program: &'a hir::Program<'t>,
-    funcs: Vec<mir::FuncId>,
+    funcs: IndexSet<mir::FuncId>,
     mir_ctxt: MirCtxt,
     res_to_var: Map<Res, Var>,
     var_to_res: Map<Var, Res>,
@@ -63,7 +63,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         Self {
             ctxt,
             program,
-            funcs: Vec::new(),
+            funcs: IndexSet::default(),
             mir_ctxt: MirCtxt::default(),
             res_to_var: Map::default(),
             var_to_res: Map::default(),
@@ -141,7 +141,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         body,
                         recursive: *recursive,
                     });
-                    self.funcs.push(func);
+                    self.funcs.insert(func);
                 }
             }
         }

@@ -69,7 +69,7 @@ impl MirCtxt {
 #[derive(Debug)]
 pub struct Program {
     pub ctxt: MirCtxt,
-    pub funcs: Vec<FuncId>,
+    pub funcs: IndexSet<FuncId>,
     pub main: ExprId,
 }
 

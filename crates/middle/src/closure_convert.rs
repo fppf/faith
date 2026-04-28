@@ -17,12 +17,14 @@ pub(crate) fn convert(program: &mut Program) {
 
 #[derive(Default)]
 struct ClosureConvert {
-    hoisted: Vec<FuncId>,
+    hoisted: IndexSet<FuncId>,
 }
 
 impl ClosureConvert {
     fn convert_func(&mut self, ctxt: &mut MirCtxt, func_id: FuncId, in_body: Option<ExprId>) {
         let mut func = std::mem::replace(&mut ctxt.funcs[func_id], Func::sentinel());
+
+        log::trace!("[convert func] name={}", func.name);
 
         let args_set: IndexSet<_> = func.args.iter().copied().collect();
 
@@ -73,7 +75,7 @@ impl ClosureConvert {
 
         ctxt.funcs[func_id] = func;
 
-        self.hoisted.push(func_id);
+        self.hoisted.insert(func_id);
     }
 
     fn convert_expr(&mut self, ctxt: &mut MirCtxt, expr_id: ExprId) {
