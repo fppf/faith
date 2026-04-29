@@ -174,6 +174,7 @@ pub enum ExprKind<'t> {
 
 #[derive(Clone, Debug)]
 pub struct Lambda<'t> {
+    pub name: Option<Ident>,
     pub args: Vec<Pat<'t>>,
     pub body: Box<Expr<'t>>,
 }

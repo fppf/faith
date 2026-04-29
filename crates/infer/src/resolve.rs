@@ -566,7 +566,14 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 // to allow for recursive functions.
                 self.current_module_mut().values.insert(ident, val_res);
 
-                let mut new_expr = self.resolve_expr(expr)?;
+                let mut new_expr = match expr.kind {
+                    ast::ExprKind::Lambda(lambda) => hir::Expr::new(
+                        self.resolve_lambda(lambda, Some(id.ident))?,
+                        expr.span,
+                        None,
+                    ),
+                    _ => self.resolve_expr(expr)?,
+                };
 
                 struct RecursiveVisitor {
                     res: Res,
@@ -715,6 +722,23 @@ impl<'ast, 't> Resolver<'ast, 't> {
         Ok(new_pats)
     }
 
+    fn resolve_lambda(
+        &mut self,
+        lambda: ast::Lambda<'ast>,
+        name: Option<Ident>,
+    ) -> Result<hir::ExprKind<'t>, ResolveError> {
+        self.check_duplicates_many(lambda.args)?;
+        self.with_local_scope(|self_| {
+            let args = self_.resolve_pats(lambda.args)?;
+            let body = self_.resolve_expr(lambda.body)?;
+            Ok(hir::ExprKind::Lambda(hir::Lambda {
+                name,
+                args,
+                body: Box::new(body),
+            }))
+        })
+    }
+
     fn resolve_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<hir::Expr<'t>, ResolveError> {
         let kind = match expr.kind {
             ExprKind::Lit(l) => hir::ExprKind::Lit(wf_lit(l, expr.span)?),
@@ -739,17 +763,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     ));
                 }
             }
-            ExprKind::Lambda(l) => {
-                self.check_duplicates_many(l.args)?;
-                self.with_local_scope(|self_| {
-                    let args = self_.resolve_pats(l.args)?;
-                    let body = self_.resolve_expr(l.body)?;
-                    Ok(hir::ExprKind::Lambda(hir::Lambda {
-                        args,
-                        body: Box::new(body),
-                    }))
-                })?
-            }
+            ExprKind::Lambda(lambda) => self.resolve_lambda(lambda, None)?,
             ExprKind::Let(binds, body) => self.with_local_scope(|self_| {
                 let mut new_binds = Vec::with_capacity(binds.len());
                 for bind in binds.iter() {

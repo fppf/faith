@@ -215,7 +215,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 Ctx::List(ListKind::Cons, args, 0, Vec::new(), Box::new(ctx)),
             ),
             ExprKind::Lambda(lambda) => {
-                let (_, func_var) = self.insert_var("f");
+                let func_var_name = if let Some(id) = lambda.name {
+                    id.as_str().to_string()
+                } else {
+                    "f".to_string()
+                };
+                let (_, func_var) = self.insert_var(&func_var_name);
                 let mut args = Vec::with_capacity(lambda.args.len());
                 let mut binds = Vec::new();
                 for (i, arg) in lambda.args.iter().enumerate() {
