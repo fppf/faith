@@ -2,7 +2,7 @@ use base::hash::IndexSet;
 use span::Sym;
 
 use crate::mir::{
-    Call, Expr, ExprId, ExprKind, Func, FuncId, MirCtxt, Program, Rhs, Value, free_vars,
+    Call, Expr, ExprId, ExprKind, Func, FuncId, JoinId, MirCtxt, Program, Rhs, Value, free_vars,
 };
 
 pub(crate) fn convert(program: &mut Program) {
@@ -12,12 +12,12 @@ pub(crate) fn convert(program: &mut Program) {
     }
     converter.convert_expr(&mut program.ctxt, program.main);
 
-    program.funcs.extend(converter.hoisted);
+    program.funcs.extend(converter.hoisted_funcs);
 }
 
 #[derive(Default)]
 struct ClosureConvert {
-    hoisted: IndexSet<FuncId>,
+    hoisted_funcs: IndexSet<FuncId>,
 }
 
 impl ClosureConvert {
@@ -73,15 +73,15 @@ impl ClosureConvert {
 
         ctxt.funcs[func_id] = func;
 
-        self.hoisted.insert(func_id);
+        self.hoisted_funcs.insert(func_id);
     }
 
     fn convert_expr(&mut self, ctxt: &mut MirCtxt, expr_id: ExprId) {
         let expr = std::mem::replace(&mut ctxt.exprs[expr_id], Expr::SENTINEL);
 
         match &expr.kind {
-            ExprKind::LetFunc { func, body } => {
-                self.convert_func(ctxt, *func, Some(*body));
+            ExprKind::LetFunc { func_id, body } => {
+                self.convert_func(ctxt, *func_id, Some(*body));
             }
             ExprKind::Let {
                 lhs,
@@ -102,7 +102,7 @@ impl ClosureConvert {
                         //    convert(body)
                         //
 
-                        let call = ctxt.calls.remove(*call_id).unwrap();
+                        let call = ctxt.calls[*call_id].clone();
                         let code_var =
                             ctxt.new_var(Sym::intern(&format!("~{}_c", call.func_var.sym)));
                         let mut args = vec![Value::Var(call.func_var)];
@@ -129,7 +129,9 @@ impl ClosureConvert {
                     _ => (),
                 }
             }
-            ExprKind::LetJoin { join: _, body } => {
+            ExprKind::LetJoin { join_id, body } => {
+                let join = &ctxt.joins[*join_id];
+                self.convert_expr(ctxt, join.body);
                 self.convert_expr(ctxt, *body);
             }
             ExprKind::Case(_, items) => {

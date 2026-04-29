@@ -2,7 +2,7 @@ use base::hash::{IndexSet, Map};
 use infer::{Res, hir, ty::TyCtxt};
 use span::{Ident, Span, Sym};
 
-use crate::mir::{self, ExprId, Join, JoinId, MirCtxt, Value, Var};
+use crate::mir::{self, ExprId, JoinId, MirCtxt, Value, Var};
 
 pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
     LoweringContext::new(ctxt, program).lower()
@@ -116,6 +116,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         mir::Program {
             ctxt: self.mir_ctxt,
             funcs: self.funcs,
+            joins: IndexSet::default(),
             main,
         }
     }
@@ -245,9 +246,9 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 };
 
                 let let_body = self.lower_expr_ret(Value::Var(func_var), ctx);
-                let func = self.mir_ctxt.new_func(func);
+                let func_id = self.mir_ctxt.new_func(func);
                 self.mir_ctxt.new_expr(mir::ExprKind::LetFunc {
-                    func,
+                    func_id,
                     body: let_body,
                 })
             }
@@ -290,13 +291,9 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 .mir_ctxt
                 .new_expr(mir::ExprKind::Jump(join_id, vec![value])),
             Ctx::If(e1, e2, ctx) => {
-                let join_id = self.mir_ctxt.new_join_id();
                 let (_, join_arg) = self.insert_var("p");
-                let join = Join {
-                    id: join_id,
-                    args: vec![join_arg],
-                    body: self.lower_expr_ret(Value::Var(join_arg), *ctx),
-                };
+                let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
+                let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let e1 = self.lower_expr_ctx(e1, Ctx::Jump(join_id));
                 let e2 = self.lower_expr_ctx(e2, Ctx::Jump(join_id));
                 let body = self.mir_ctxt.new_expr(mir::ExprKind::Case(
@@ -306,21 +303,20 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         (mir::Pat::Lit(mir::Lit::Bool(false)), e2),
                     ],
                 ));
-                self.mir_ctxt
-                    .new_expr(mir::ExprKind::LetJoin { join, body })
+                self.mir_ctxt.new_expr(mir::ExprKind::LetJoin {
+                    join_id: join_id,
+                    body,
+                })
             }
             Ctx::Case(_branch_var, arms, compiled, ctx) => {
-                let join_id = self.mir_ctxt.new_join_id();
                 let (_, join_arg) = self.insert_var("p");
-                let join = Join {
-                    id: join_id,
-                    args: vec![join_arg],
-                    body: self.lower_expr_ret(Value::Var(join_arg), *ctx),
-                };
+                let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
+                let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let tree = self.lower_decision_tree(join_id, &compiled.tree, arms);
-                let let_join = self
-                    .mir_ctxt
-                    .new_expr(mir::ExprKind::LetJoin { join, body: tree });
+                let let_join = self.mir_ctxt.new_expr(mir::ExprKind::LetJoin {
+                    join_id: join_id,
+                    body: tree,
+                });
                 self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: self.get_var(compiled.branch_var),
                     rhs: mir::Rhs::Value(value),

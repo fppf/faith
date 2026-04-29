@@ -26,11 +26,12 @@ impl<'a> Shrinker<'a> {
 
         match &expr.kind {
             ExprKind::Let { body, .. } => self.shrink_expr(*body),
-            ExprKind::LetFunc { func, body } => {
-                self.shrink_func(*func);
+            ExprKind::LetFunc { func_id, body } => {
+                self.shrink_func(*func_id);
                 self.shrink_expr(*body);
             }
-            ExprKind::LetJoin { join, body } => {
+            ExprKind::LetJoin { join_id, body } => {
+                let join = &self.ctxt.joins[*join_id];
                 self.shrink_expr(join.body);
                 self.shrink_expr(*body);
             }
@@ -47,8 +48,8 @@ impl<'a> Shrinker<'a> {
                 // Cannot remove calls on rhs, as they might not terminate
                 self.try_replace(*lhs, expr_id, *body)
             }
-            ExprKind::LetFunc { func, body } => {
-                let func = &self.ctxt.funcs[*func];
+            ExprKind::LetFunc { func_id, body } => {
+                let func = &self.ctxt.funcs[*func_id];
                 self.try_replace(func.name, expr_id, *body)
             }
             _ => false,

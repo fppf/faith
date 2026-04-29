@@ -28,21 +28,26 @@ pub enum TyKind {
 }
 
 new_key_type! { pub struct FuncId; }
+new_key_type! { pub struct JoinId; }
 new_key_type! { pub struct ExprId; }
 new_key_type! { pub struct CallId; }
 
 #[derive(Default, Debug)]
 pub struct MirCtxt {
     pub funcs: SlotMap<FuncId, Func>,
+    pub joins: SlotMap<JoinId, Join>,
     pub exprs: SlotMap<ExprId, Expr>,
     pub calls: SlotMap<CallId, Call>,
     var_counter: Cell<u32>,
-    join_counter: Cell<u32>,
 }
 
 impl MirCtxt {
     pub fn new_func(&mut self, func: Func) -> FuncId {
         self.funcs.insert(func)
+    }
+
+    pub fn new_join(&mut self, args: Vec<Var>, body: ExprId) -> JoinId {
+        self.joins.insert_with_key(|id| Join { id, args, body })
     }
 
     pub fn new_expr(&mut self, kind: ExprKind) -> ExprId {
@@ -58,17 +63,12 @@ impl MirCtxt {
         self.var_counter.update(|c| c + 1);
         Var::new(sym, stamp)
     }
-
-    pub fn new_join_id(&self) -> JoinId {
-        let id = self.join_counter.get();
-        self.join_counter.update(|c| c + 1);
-        JoinId(id)
-    }
 }
 
 #[derive(Debug)]
 pub struct Program {
     pub ctxt: MirCtxt,
+    pub joins: IndexSet<JoinId>,
     pub funcs: IndexSet<FuncId>,
     pub main: ExprId,
 }
@@ -98,9 +98,9 @@ pub enum ExprKind {
     // let lhs = rhs in body
     Let { lhs: Var, rhs: Rhs, body: ExprId },
     // let func in body
-    LetFunc { func: FuncId, body: ExprId },
+    LetFunc { func_id: FuncId, body: ExprId },
     // let join in body
-    LetJoin { join: Join, body: ExprId },
+    LetJoin { join_id: JoinId, body: ExprId },
     // tail call
     Tail(CallId),
     // jump(id, v1, ..., vn)
@@ -129,7 +129,9 @@ impl FreeVars {
         self.expr_vars(ctxt, func.body);
     }
 
-    pub fn join_vars(&mut self, ctxt: &MirCtxt, join: &Join) {
+    pub fn join_vars(&mut self, ctxt: &MirCtxt, join_id: JoinId) {
+        let join = &ctxt.joins[join_id];
+
         for var in &join.args {
             self.bind_var(*var);
         }
@@ -144,12 +146,15 @@ impl FreeVars {
                 self.rhs_vars(ctxt, rhs);
                 self.expr_vars(ctxt, *body);
             }
-            ExprKind::LetFunc { func, body } => {
+            ExprKind::LetFunc {
+                func_id: func,
+                body,
+            } => {
                 self.func_vars(ctxt, *func);
                 self.expr_vars(ctxt, *body);
             }
-            ExprKind::LetJoin { join, body } => {
-                self.join_vars(ctxt, join);
+            ExprKind::LetJoin { join_id, body } => {
+                self.join_vars(ctxt, *join_id);
                 self.expr_vars(ctxt, *body);
             }
             ExprKind::Tail(call) => self.call_vars(ctxt, *call),
@@ -213,9 +218,6 @@ impl FreeVars {
         self.bound.insert(var);
     }
 }
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct JoinId(pub u32);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Value {

@@ -2,8 +2,10 @@ use std::fmt;
 
 use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
 
+use slotmap::Key;
+
 use crate::mir::{
-    CallId, ExprId, ExprKind, FuncId, Join, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
+    CallId, ExprId, ExprKind, FuncId, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
 };
 
 impl fmt::Display for Var {
@@ -15,7 +17,10 @@ impl fmt::Display for Var {
 
 impl fmt::Display for JoinId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, ".j{}", self.0)
+        let ffi = self.data().as_ffi();
+        let idx = ffi & 0xffff_ffff;
+        let version = (ffi >> 32) | 1;
+        write!(f, ".j{idx}_{version}")
     }
 }
 
@@ -71,14 +76,20 @@ impl ExprId {
                 .space("in")
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
-            ExprKind::LetFunc { func, body } => arena
+            ExprKind::LetFunc {
+                func_id: func,
+                body,
+            } => arena
                 .text("let ")
                 .append(func.to_doc(ctxt, arena).nest(2))
                 .append(arena.line())
                 .append("in")
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
-            ExprKind::LetJoin { join, body } => arena
+            ExprKind::LetJoin {
+                join_id: join,
+                body,
+            } => arena
                 .text("let ")
                 .append(join.to_doc(ctxt, arena).nest(2))
                 .append(arena.line())
@@ -166,16 +177,17 @@ impl FuncId {
     }
 }
 
-impl Join {
-    pub fn to_doc<'a>(&self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+impl JoinId {
+    pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let join = &ctxt.joins[self];
         arena
             .text("join")
-            .space(self.id)
-            .space(arena.intersperse(self.args.iter().copied(), arena.space()))
+            .space(join.id)
+            .space(arena.intersperse(join.args.iter().copied(), arena.space()))
             .space("=")
             .group()
             .append(arena.line())
-            .append(self.body.to_doc(ctxt, arena))
+            .append(join.body.to_doc(ctxt, arena))
     }
 }
 
@@ -195,6 +207,14 @@ impl CallId {
 impl Program {
     pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         let mut doc = arena.empty();
+
+        for join in &self.joins {
+            doc = doc
+                .append(join.to_doc(&self.ctxt, arena).nest(2))
+                .append(arena.line())
+                .append(arena.line());
+        }
+
         for func in &self.funcs {
             doc = doc
                 .append(func.to_doc(&self.ctxt, arena).nest(2))
