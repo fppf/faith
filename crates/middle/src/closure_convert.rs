@@ -24,8 +24,6 @@ impl ClosureConvert {
     fn convert_func(&mut self, ctxt: &mut MirCtxt, func_id: FuncId, in_body: Option<ExprId>) {
         let mut func = std::mem::replace(&mut ctxt.funcs[func_id], Func::sentinel());
 
-        log::trace!("[convert func] name={}", func.name);
-
         let args_set: IndexSet<_> = func.args.iter().copied().collect();
 
         let fv = free_vars(ctxt, func.body);

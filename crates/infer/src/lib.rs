@@ -241,7 +241,7 @@ impl<'t> Infer<'t> {
                     expected_typ,
                     typ,
                 } => {
-                    log::trace!("[infer item] {var} recursive={recursive}, expr={expr:?}");
+                    log::trace!("[infer item] {var} recursive={recursive}");
                     assert!(typ.is_none());
                     let ty = if *recursive {
                         // FIXME
@@ -276,6 +276,7 @@ impl<'t> Infer<'t> {
                     };
                     expr.typ = Some(ty);
                     *typ = Some(ty);
+                    self.variables.insert(var.res, ty);
                 }
             }
         }

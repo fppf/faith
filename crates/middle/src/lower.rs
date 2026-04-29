@@ -172,7 +172,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
     fn lower_expr_ctx(&mut self, expr: &'a hir::Expr<'t>, ctx: Ctx<'a, 't>) -> ExprId {
         use hir::ExprKind;
         match &expr.kind {
-            ExprKind::Var(var) => self.lower_var_ctx(*var, ctx),
+            ExprKind::Var(var) => {
+                if let Some(sym) = var.external {
+                    self.get_or_insert_var(*var);
+                }
+                self.lower_var_ctx(*var, ctx)
+            }
             ExprKind::Lit(lit) => {
                 let lit = self.lower_lit(*lit);
                 self.lower_expr_ret(Value::Lit(lit), ctx)
