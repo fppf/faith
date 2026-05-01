@@ -9,3 +9,4 @@ members = ["crates/*"]
 
 [dependencies]
 driver = { path = "crates/driver" }
+lexopt = "0.3"
