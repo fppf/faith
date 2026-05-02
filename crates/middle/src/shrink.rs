@@ -40,7 +40,10 @@ impl<'a> Shrinker<'a> {
                     self.shrink_expr(expr);
                 }
             }
-            ExprKind::Tail(_) | ExprKind::Jump(..) | ExprKind::Return(_) => (),
+            ExprKind::Tail(_)
+            | ExprKind::ExternalCall(..)
+            | ExprKind::Jump(..)
+            | ExprKind::Return(_) => (),
         }
 
         let modified = match &expr.kind {

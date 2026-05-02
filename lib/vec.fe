@@ -6,7 +6,6 @@
 
 -- Creation
 
-external empty : ['a] = "$vec_empty"
 external single : 'a -> ['a] = "$vec_single"
 external rep : i32 -> 'a -> ['a] = "$vec_rep"
 external gen : i32 -> (i32 -> 'a) -> ['a] = "$vec_gen" 

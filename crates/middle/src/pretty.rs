@@ -97,6 +97,14 @@ impl ExprId {
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
             ExprKind::Tail(call) => call.to_doc(ctxt, arena),
+            ExprKind::ExternalCall(ext, args) => ext
+                .into_doc(arena)
+                .append(
+                    arena
+                        .intersperse(args.iter().map(|arg| arg.into_doc(arena)), arena.space())
+                        .enclose("$(", ")"),
+                )
+                .group(),
             ExprKind::Jump(join_id, vs) => join_id
                 .into_doc(arena)
                 .space(arena.intersperse(vs.iter().copied(), arena.space()))

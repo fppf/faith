@@ -173,12 +173,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
     fn lower_expr_ctx(&mut self, expr: &'a hir::Expr<'t>, ctx: Ctx<'a, 't>) -> ExprId {
         use hir::ExprKind;
         match &expr.kind {
-            ExprKind::Var(var) => {
-                if let Some(sym) = var.external {
-                    self.get_or_insert_var(*var);
-                }
-                self.lower_var_ctx(*var, ctx)
-            }
+            ExprKind::Var(var) => self.lower_var_ctx(*var, ctx),
             ExprKind::Lit(lit) => {
                 let lit = self.lower_lit(*lit);
                 self.lower_expr_ret(Value::Lit(lit), ctx)
@@ -211,6 +206,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 f,
                 Ctx::List(ListKind::Call, args, 0, Vec::new(), Box::new(ctx)),
             ),
+            ExprKind::ExternalCall(ext_var, args) => {
+                let ext_var = self.get_or_insert_var(*ext_var);
+                let args: Vec<_> = args.iter().map(|&var| self.get_var(var)).collect();
+                self.mir_ctxt
+                    .new_expr(mir::ExprKind::ExternalCall(ext_var, args))
+            }
             ExprKind::Cons(cons, args) => self.lower_var_ctx(
                 *cons,
                 Ctx::List(ListKind::Cons, args, 0, Vec::new(), Box::new(ctx)),

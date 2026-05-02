@@ -103,6 +103,8 @@ pub enum ExprKind {
     LetJoin { join_id: JoinId, body: ExprId },
     // tail call
     Tail(CallId),
+    // external tail calls
+    ExternalCall(Var, Vec<Var>),
     // jump(id, v1, ..., vn)
     Jump(JoinId, Vec<Value>),
     // return(v)
@@ -158,6 +160,11 @@ impl FreeVars {
                 self.expr_vars(ctxt, *body);
             }
             ExprKind::Tail(call) => self.call_vars(ctxt, *call),
+            ExprKind::ExternalCall(_, args) => {
+                for var in args {
+                    self.add_var(*var);
+                }
+            }
             ExprKind::Jump(_, vals) => {
                 for val in vals {
                     self.value_vars(val);

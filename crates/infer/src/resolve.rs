@@ -15,8 +15,8 @@ use span::{
     diag::{Diagnostic, Label, Level},
 };
 use syntax::ast::{
-    self, AstVisitor, CompUnit, Expr, ExprKind, Item, Lit, ModExpr, Pat, PatKind, Path, Program,
-    Type, TypeDeclKind,
+    self, AstId, AstVisitor, CompUnit, Expr, ExprKind, Id, Item, Lit, ModExpr, Pat, PatKind, Path,
+    Program, Type, TypeDeclKind,
 };
 
 use crate::{
@@ -41,6 +41,7 @@ enum ResolveError {
     DuplicateItemBinding(Namespace, Sym, Span, Span),
     RecursiveValue(Sym, Span),
     ConstructorArity(Sym, Span, usize, usize),
+    ExternalTypeNotArrow(Sym, Span),
     InvalidInt(Span, std::num::ParseIntError),
 }
 
@@ -78,6 +79,9 @@ impl From<ResolveError> for Diagnostic {
                     ))
                     .with_labels(vec![Label::new(span, "")])
             }
+            ResolveError::ExternalTypeNotArrow(sym, span) => Diagnostic::new(Level::Error)
+                .with_message(format!("external `{sym}` needs an explicit arrow type"))
+                .with_labels(vec![Label::new(span, "")]),
             ResolveError::InvalidInt(span, e) => Diagnostic::new(Level::Error)
                 .with_message("parsed integer is invalid")
                 .with_labels(vec![Label::new(span, e.to_string())]),
@@ -302,9 +306,9 @@ impl<'ast, 't> Resolver<'ast, 't> {
         var
     }
 
-    fn make_local(&mut self, id: ast::Id) -> Var<'t> {
+    fn make_local(&mut self, id: ast::Id, typ: Option<Ty<'t>>) -> Var<'t> {
         let res = Res::Local(self.ctxt.new_res_id());
-        let var = self.make_var(id, res, None);
+        let var = self.make_var(id, res, typ);
         self.locals.insert(id.ident, var);
         var
     }
@@ -544,16 +548,77 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     }
                 }
             }
-            Item::External(id, ast_ty, mapped_to) => {
+            Item::External(id, ast_typ, mapped_to) => {
                 let ident = id.ident;
                 seen.update(Namespace::Value, ident)?;
 
-                let typ = self.lower_type(ast_ty)?;
+                // Given an external declaration
+                //   external f : t = "symbol"
+                // where t is an n-ary arrow type, generate the top-level lambda definition
+                //   let f = \a_1 .. a_n -> external_call(f, a_1, .., a_n)
+                //
+                // This forces all calls to the external f to be directly applied with
+                // the expected arity, while still permitting user code to use curried
+                // versions.
+
+                let typ = self.lower_type(ast_typ)?;
+                if !matches!(typ.kind(), TyKind::Arrow(_, _)) {
+                    return Err(ResolveError::ExternalTypeNotArrow(
+                        ident.sym,
+                        ast_typ.span(),
+                    ));
+                }
 
                 let ext_res = Res::Def(DefKind::Value, self.ctxt.new_res_id());
-                let _ext_var = self.make_external_var(id, ext_res, typ, mapped_to.sym);
+                let ext_var = self.make_external_var(id, ext_res, typ, mapped_to.sym);
 
-                self.current_module_mut().values.insert(ident, ext_res);
+                let mut args = Vec::new();
+                {
+                    let mut arrow = typ;
+                    let mut count = 1;
+                    while let TyKind::Arrow(from, to) = arrow.kind() {
+                        let arg_var = self.make_local(
+                            Id::new(
+                                Ident::new(Sym::intern(&format!("a{count}")), Span::dummy()),
+                                AstId::ZERO,
+                            ),
+                            Some(*from),
+                        );
+                        args.push(arg_var);
+
+                        arrow = *to;
+                        count += 1;
+                    }
+                }
+
+                let external_lambda = hir::Expr::new(
+                    hir::ExprKind::Lambda(hir::Lambda {
+                        name: Some(ident),
+                        args: args
+                            .iter()
+                            .map(|&arg| hir::Pat::new(hir::PatKind::Var(arg), arg.span, arg.typ))
+                            .collect(),
+                        body: Box::new(hir::Expr::new(
+                            hir::ExprKind::ExternalCall(ext_var, args),
+                            ident.span,
+                            None,
+                        )),
+                    }),
+                    item.span,
+                    None,
+                );
+
+                let lambda_res = Res::Def(DefKind::Value, self.ctxt.new_res_id());
+                let lambda_var = self.make_var(id, lambda_res, Some(typ));
+                self.current_module_mut().values.insert(ident, lambda_res);
+
+                return Ok(vec![hir::Item::Expr {
+                    var: lambda_var,
+                    recursive: false,
+                    expr: external_lambda,
+                    expected_typ: Some(Sp::new(typ, ast_typ.span())),
+                    typ: None,
+                }]);
             }
             Item::Value(id, ast_ty, expr) => {
                 let (ident, ast_id) = (id.ident, id.ast_id);
@@ -698,7 +763,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
         let kind = match pat.kind {
             PatKind::Wild => hir::PatKind::Wild,
             PatKind::Lit(l) => hir::PatKind::Lit(wf_lit(l, pat.span)?),
-            PatKind::Var(id) => hir::PatKind::Var(self.make_local(id)),
+            PatKind::Var(id) => hir::PatKind::Var(self.make_local(id, None)),
             PatKind::Ann(p, t) => {
                 let p = self.resolve_pat(p)?;
                 let ty = self.lower_type(t)?;

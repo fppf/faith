@@ -146,7 +146,7 @@ impl<'a> ClosureConvert<'a> {
                 }
             }
             ExprKind::Tail(_call) => unreachable!(),
-            ExprKind::Jump(..) | ExprKind::Return(_) => (),
+            ExprKind::ExternalCall(..) | ExprKind::Jump(..) | ExprKind::Return(_) => (),
         }
 
         self.ctxt.exprs[expr_id] = expr;

@@ -1,9 +1,7 @@
-use base::hash::{IndexMap, IndexSet};
-use span::Sym;
+use base::hash::IndexMap;
 
 use crate::mir::{
-    Call, Expr, ExprId, ExprKind, Func, FuncId, JoinId, MirCtxt, Program, Rhs, Value, Var,
-    free_vars,
+    Expr, ExprId, ExprKind, Func, FuncId, JoinId, MirCtxt, Program, Value, Var, free_vars,
 };
 
 pub(crate) fn hoist(program: &mut Program) {
@@ -38,12 +36,9 @@ impl<'a> Hoister<'a> {
     }
 
     fn hoist_in_func(&mut self, func_id: FuncId, in_body: Option<ExprId>) {
-        let mut func = std::mem::replace(&mut self.ctxt.funcs[func_id], Func::sentinel());
+        let func = std::mem::replace(&mut self.ctxt.funcs[func_id], Func::sentinel());
 
         if let Some(body_id) = in_body {
-            let body = self.ctxt.exprs[body_id].clone();
-            let body = self.ctxt.new_expr(body.kind);
-
             self.hoist_in_expr(body_id);
         }
 
@@ -94,7 +89,10 @@ impl<'a> Hoister<'a> {
                     self.hoist_in_expr(expr_id);
                 }
             }
-            ExprKind::Tail(_) | ExprKind::Jump(..) | ExprKind::Return(_) => (),
+            ExprKind::Tail(_)
+            | ExprKind::ExternalCall(..)
+            | ExprKind::Jump(..)
+            | ExprKind::Return(_) => (),
         }
 
         self.ctxt.exprs[expr_id] = expr;

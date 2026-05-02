@@ -285,6 +285,20 @@ impl<'t> Infer<'t> {
         Ok(())
     }
 
+    fn infer_var(&mut self, var: &mut Var<'t>) -> Ty<'t> {
+        match &mut var.typ {
+            Some(typ) => *typ,
+            None => {
+                let typ = *self
+                    .variables
+                    .get(&var.res)
+                    .unwrap_or_else(|| panic!("no type for var {var}"));
+                var.typ = Some(typ);
+                typ
+            }
+        }
+    }
+
     fn infer_expr(&mut self, expr: &mut Expr<'t>) -> Result<Ty<'t>, InferError<'t>> {
         let ty = match &mut expr.kind {
             ExprKind::Var(v) => match &mut v.typ {
@@ -313,6 +327,20 @@ impl<'t> Infer<'t> {
                     Origin::Generic(head_span, Span::dummy()),
                     Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
                     head_ty,
+                )?;
+                ret_ty
+            }
+            ExprKind::ExternalCall(ext_var, args) => {
+                let mut arg_typs = Vec::with_capacity(args.len());
+                for arg in args.iter_mut() {
+                    arg_typs.push(self.infer_var(arg));
+                }
+
+                let ret_ty = self.fresh_var();
+                self.eq(
+                    Origin::Generic(ext_var.span, Span::dummy()),
+                    Ty::n_arrow(self.ctxt, arg_typs, ret_ty),
+                    ext_var.typ.expect("external without type"),
                 )?;
                 ret_ty
             }
