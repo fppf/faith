@@ -139,7 +139,8 @@ impl<'ast> Parser<'ast> {
             span.end = span.end - BytePos::from_u32(1);
             span
         } else {
-            self.current().span
+            let prev_pos = self.pos.saturating_sub(1);
+            self.tokens.get(prev_pos).unwrap_or(&Token::dummy()).span
         })
     }
 
