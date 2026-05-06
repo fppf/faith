@@ -1,6 +1,6 @@
 use std::fmt;
 
-use base::pp::{self, DocArena, DocBuilder, PRETTY_WIDTH};
+use base::pp::{DocArena, DocBuilder, PRETTY_WIDTH};
 
 use crate::ast::*;
 
@@ -94,8 +94,7 @@ impl Type<'_> {
                 } else {
                     arena
                         .text(path.to_string())
-                        .append(arena.space())
-                        .append(arena.intersperse(
+                        .space(arena.intersperse(
                             args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
                             " ",
                         ))
@@ -123,7 +122,8 @@ impl Pat<'_> {
             | PatKind::Var(_)
             | PatKind::Ann(..)
             | PatKind::Tuple(_) => false,
-            PatKind::Cons(..) | PatKind::Or(_) => true,
+            PatKind::Cons(_, args) => !args.is_empty(),
+            PatKind::Or(_) => true,
         }
     }
 
@@ -148,8 +148,7 @@ impl Pat<'_> {
                 } else {
                     arena
                         .text(path.to_string())
-                        .append(arena.space())
-                        .append(arena.intersperse(
+                        .space(arena.intersperse(
                             args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
                             " ",
                         ))
@@ -179,11 +178,11 @@ impl Expr<'_> {
             | ExprKind::Ann(..)
             | ExprKind::Tuple(_)
             | ExprKind::Vector(_) => false,
+            ExprKind::Cons(_, args) => !args.is_empty(),
             ExprKind::Case(..)
             | ExprKind::If(..)
             | ExprKind::Lambda(_)
             | ExprKind::Call(..)
-            | ExprKind::Cons(..)
             | ExprKind::Let(..)
             | ExprKind::Seq(..) => true,
         }
@@ -264,16 +263,44 @@ impl Expr<'_> {
                 } else {
                     arena
                         .text(path.to_string())
-                        .append(arena.space())
-                        .append(arena.intersperse(
+                        .space(arena.intersperse(
                             args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
                             " ",
                         ))
                         .group()
-                        .parens()
                 }
             }
-            ExprKind::Let(items, expr) => todo!(),
+            ExprKind::Let(binds, expr) => {
+                let binds = if binds.len() == 1 {
+                    let (p, e) = binds[0];
+                    arena
+                        .space()
+                        .append(p.to_doc(arena, Parens::Top))
+                        .append(" = ")
+                        .append(e.to_doc(arena, Parens::Top))
+                        .append(" ")
+                } else {
+                    arena
+                        .line()
+                        .append(arena.intersperse(
+                            binds.iter().map(|(p, e)| {
+                                p.to_doc(arena, Parens::Top)
+                                    .append(" = ")
+                                    .append(e.to_doc(arena, Parens::Top))
+                                    .group()
+                            }),
+                            arena.text(",").append(arena.line()),
+                        ))
+                        .append(",")
+                        .nest(2)
+                        .append(arena.line())
+                };
+                arena
+                    .text("let")
+                    .append(binds)
+                    .append("in")
+                    .space(expr.to_doc(arena, Parens::Inner))
+            }
             ExprKind::Seq(expr1, expr2) => expr1
                 .to_doc(arena, Parens::Top)
                 .append(";")
