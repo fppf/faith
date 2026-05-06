@@ -17,6 +17,8 @@ pub use log::{Level, get_buffer};
 
 pub struct Options {
     pub include_std: bool,
+    pub parse_only: bool,
+    pub dump_ast: bool,
     pub dump_mir: bool,
     pub mode: Mode,
 }
@@ -47,6 +49,14 @@ fn run_passes(src: Source, options: &Options) -> Result<(), diag::Diagnostic> {
                 syntax::parse_str_program_in(&syntax_arena, &src, options.include_std)
             }
         }?;
+
+        if options.dump_ast {
+            println!("{program}");
+        }
+
+        if options.parse_only {
+            return Ok(());
+        }
 
         infer::infer_program_in(&ctxt, program)
     }?;

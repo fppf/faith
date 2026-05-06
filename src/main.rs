@@ -37,6 +37,8 @@ fn parse_args_with(parser: &mut lexopt::Parser, help_message: &str) -> Result<Ar
     let mut program_path = None;
     let mut options = Options {
         include_std: true,
+        parse_only: false,
+        dump_ast: false,
         dump_mir: false,
         mode: Mode::Real(log_level),
     };
@@ -47,6 +49,8 @@ fn parse_args_with(parser: &mut lexopt::Parser, help_message: &str) -> Result<Ar
                 program_path = Some(PathBuf::from(val.string()?));
             }
             Arg::Long("no-std") => options.include_std = false,
+            Arg::Long("parse-only") => options.parse_only = true,
+            Arg::Long("dump-ast") => options.dump_ast = true,
             Arg::Long("dump-mir") => options.dump_mir = true,
             Arg::Short('h') | Arg::Long("help") => {
                 println!("{help_message}");

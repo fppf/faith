@@ -243,6 +243,14 @@ impl<'a> DocBuilder<'a> {
         left.into_doc(self.0).append(self).append(right)
     }
 
+    pub fn parens(self) -> DocBuilder<'a> {
+        self.enclose("(", ")")
+    }
+
+    pub fn brackets(self) -> DocBuilder<'a> {
+        self.enclose("[", "]")
+    }
+
     pub fn space<D: IntoDoc<'a>>(self, other: D) -> DocBuilder<'a> {
         let space = self.0.space();
         self.append(space).append(other)
