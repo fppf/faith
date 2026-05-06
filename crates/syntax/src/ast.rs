@@ -128,7 +128,7 @@ pub enum TypeDeclKind<'ast> {
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'ast> {
     Type(&'ast [TypeDecl<'ast>]),
-    Value(Id, Option<&'ast Sp<Type<'ast>>>, &'ast Expr<'ast>),
+    Func(Id, Option<&'ast Sp<Type<'ast>>>, &'ast Expr<'ast>),
     External(Id, &'ast Sp<Type<'ast>>, Ident),
     Mod(Id, &'ast Sp<ModExpr<'ast>>),
 }
@@ -237,7 +237,7 @@ pub trait AstVisitor<'ast>: Sized {
         match item {
             Item::Type(..) => (),
             Item::External(..) => (),
-            Item::Value(_, _, expr) => self.visit_expr(expr),
+            Item::Func(_, _, expr) => self.visit_expr(expr),
             Item::Mod(_, mod_expr) => self.visit_mod_expr(mod_expr),
         }
     }

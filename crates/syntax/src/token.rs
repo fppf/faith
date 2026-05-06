@@ -49,6 +49,7 @@ pub enum TokenKind {
     KW_CASE,
     KW_ELSE,
     KW_EXTERNAL,
+    KW_FN,
     KW_IF,
     KW_IMPORT,
     KW_IN,
@@ -58,7 +59,6 @@ pub enum TokenKind {
     KW_OF,
     KW_THEN,
     KW_TYPE,
-    KW_VAL,
 
     VAR(Ident),
     INFIX(Ident, char),
@@ -86,6 +86,7 @@ impl TokenKind {
                 | KW_CASE
                 | KW_ELSE
                 | KW_EXTERNAL
+                | KW_FN
                 | KW_IF
                 | KW_IMPORT
                 | KW_IN
@@ -95,7 +96,6 @@ impl TokenKind {
                 | KW_OF
                 | KW_THEN
                 | KW_TYPE
-                | KW_VAL
         )
     }
 }
@@ -128,6 +128,7 @@ impl fmt::Display for TokenKind {
             KW_CASE => "case".fmt(f),
             KW_ELSE => "else".fmt(f),
             KW_EXTERNAL => "external".fmt(f),
+            KW_FN => "fn".fmt(f),
             KW_IF => "if".fmt(f),
             KW_IMPORT => "import".fmt(f),
             KW_IN => "in".fmt(f),
@@ -137,7 +138,6 @@ impl fmt::Display for TokenKind {
             KW_OF => "of".fmt(f),
             KW_THEN => "then".fmt(f),
             KW_TYPE => "type".fmt(f),
-            KW_VAL => "val".fmt(f),
 
             VAR(id) => write!(f, "'{}", id.sym.as_str()),
             INFIX(id, _) | IDENT(id, _) => id.sym.as_str().fmt(f),

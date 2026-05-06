@@ -620,7 +620,7 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     typ: None,
                 }]);
             }
-            Item::Value(id, ast_ty, expr) => {
+            Item::Func(id, ast_ty, expr) => {
                 let (ident, ast_id) = (id.ident, id.ast_id);
                 seen.update(Namespace::Value, ident)?;
 

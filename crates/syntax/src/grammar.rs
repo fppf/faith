@@ -887,7 +887,7 @@ fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
 fn struct_item<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     match p.current().kind {
         KW_TYPE => struct_item_type_decl(p),
-        KW_VAL => struct_item_val(p),
+        KW_FN => struct_item_func(p),
         KW_MOD => struct_item_mod(p),
         KW_EXTERNAL => struct_item_external(p),
         _ => Err(ParseError::new("expected structure item", p.current().span)),
@@ -903,9 +903,9 @@ fn struct_item_type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast
     Ok(Sp::new(Item::Type(alloc_iter!(p, decl_group)), p.end(m)))
 }
 
-fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
+fn struct_item_func<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     let m = p.start();
-    p.bump(KW_VAL);
+    p.bump(KW_FN);
     let (id, kind) = ident_or_infix(p)?;
     let id = Id::new(id, p.next_ast_id());
     if kind == IdentKind::Cons {
@@ -923,13 +923,16 @@ fn struct_item_val<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Item<'ast>>> {
     } else {
         None
     };
-    p.expect(EQUAL)?;
-    let body = alloc!(p, expr(p)?);
     if args.is_empty() {
-        Ok(Sp::new(Item::Value(id, typ, body), p.end(m)))
+        Err(ParseError::new(
+            "expected at least one argument in function definition",
+            p.end(m),
+        ))
     } else {
+        p.expect(EQUAL)?;
+        let body = alloc!(p, expr(p)?);
         Ok(Sp::new(
-            Item::Value(
+            Item::Func(
                 id,
                 typ,
                 alloc!(

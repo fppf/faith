@@ -13,7 +13,7 @@ mod i32 = {
 
 mod bool = {
    external (==) : bool -> bool -> bool = "$bool_eq"
-   val to_str b = case b {
+   fn to_str b = case b {
       true  => "true",
       false => "false",
    }
@@ -24,4 +24,4 @@ mod list = import "list.fe"
 mod option = import "option.fe"
 mod either = import "either.fe"
 
-val id x = x
+fn id x = x
