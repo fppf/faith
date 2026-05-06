@@ -1,0 +1,8 @@
+main = a + (1, 2 + b
+
+-- args: --test --parse-only --no-std --dump-ast
+-- error: expected token ')', got 'EOF'
+--   ┌─ /home/ryn/faith/tests/syntax/unclosed_tuple.fe:1:12
+--   │
+-- 1 │ main = a + (1, 2 + b
+--   │            ^

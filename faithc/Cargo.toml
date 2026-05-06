@@ -1,0 +1,9 @@
+[package]
+name = "faithc"
+version = "0.0.0"
+edition = "2024"
+authors = ["ryn <ryn@fppf.site>"]
+
+[dependencies]
+driver = { path = "../crates/driver" }
+lexopt = "0.3"

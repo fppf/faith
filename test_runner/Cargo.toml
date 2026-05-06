@@ -1,0 +1,9 @@
+[package]
+name = "test_runner"
+version = "0.0.0"
+edition = "2024"
+authors = ["ryn <ryn@fppf.site>"]
+
+[dependencies]
+similar = "3"
+walkdir = "2"

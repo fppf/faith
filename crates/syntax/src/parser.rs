@@ -29,7 +29,7 @@ pub(crate) struct Parser<'ast> {
 
 #[derive(Clone, Copy)]
 pub struct Marker {
-    start: Span,
+    pub start: Span,
 }
 
 impl Marker {
@@ -105,7 +105,7 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    pub fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
+    pub fn expect_with_span(&mut self, kind: TokenKind, span: Span) -> ParseResult<()> {
         if self.eat(kind) {
             Ok(())
         } else {
@@ -124,9 +124,13 @@ impl<'ast> Parser<'ast> {
                         ""
                     },
                 ),
-                self.current().span,
+                span,
             ))
         }
+    }
+
+    pub fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
+        self.expect_with_span(kind, self.current().span)
     }
 
     pub fn start(&self) -> Marker {

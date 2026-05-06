@@ -335,7 +335,7 @@ fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     }
     if p.eat(COLON) {
         let t = type_(p)?;
-        p.expect(R_PAREN)?;
+        p.expect_with_span(R_PAREN, m.start)?;
         return Ok(Expr::new(
             ExprKind::Ann(alloc!(p, first), alloc!(p, t)),
             p.end(m),
@@ -346,7 +346,7 @@ fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     while !p.at(EOF) && p.eat(COMMA) {
         elements.push(expr(p)?);
     }
-    p.expect(R_PAREN)?;
+    p.expect_with_span(R_PAREN, m.start)?;
     Ok(Expr::new(
         ExprKind::Tuple(alloc_iter!(p, elements)),
         p.end(m),

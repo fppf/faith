@@ -92,7 +92,7 @@ pub fn report(test: bool) -> bool {
         });
 
         if let ReportWriter::Test(w) = w {
-            log::error!("{}", String::from_utf8_lossy(&w.into_inner()));
+            eprint!("{}", String::from_utf8_lossy(&w.into_inner()));
         }
 
         error

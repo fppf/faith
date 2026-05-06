@@ -1,12 +1,7 @@
-[package]
-name = "faith"
-version = "0.0.0"
-edition = "2024"
-authors = ["ryn <ryn@fppf.site>"]
-
 [workspace]
-members = ["crates/*"]
-
-[dependencies]
-driver = { path = "crates/driver" }
-lexopt = "0.3"
+resolver = "3"
+members = [
+  "crates/*",
+  "test_runner",
+  "faithc",
+]
