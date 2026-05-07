@@ -18,6 +18,7 @@ pub use log::{Level, get_buffer};
 pub struct Options {
     pub include_std: bool,
     pub parse_only: bool,
+    pub infer_only: bool,
     pub dump_ast: bool,
     pub dump_hir: bool,
     pub dump_mir: bool,
@@ -26,7 +27,7 @@ pub struct Options {
 
 pub fn run(src: Source, options: &Options) -> bool {
     match options.mode {
-        Mode::Test => log::init(Level::Trace),
+        Mode::Test => log::init(Level::Warn),
         Mode::Real(lvl) => log::init(lvl),
     };
 
@@ -64,6 +65,10 @@ fn run_passes(src: Source, options: &Options) -> Result<(), diag::Diagnostic> {
 
     if options.dump_hir {
         println!("{hir}");
+    }
+
+    if options.infer_only {
+        return Ok(());
     }
 
     let _mir = middle::lower_and_transform(&ctxt, &hir);
