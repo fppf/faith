@@ -8,6 +8,7 @@ use syntax::ast;
 
 mod error;
 mod match_compile;
+mod pretty;
 mod resolve;
 mod substitution;
 mod unify;

@@ -39,6 +39,7 @@ fn parse_args_with(parser: &mut lexopt::Parser, help_message: &str) -> Result<Ar
         include_std: true,
         parse_only: false,
         dump_ast: false,
+        dump_hir: false,
         dump_mir: false,
         mode: Mode::Real(log_level),
     };
@@ -52,6 +53,7 @@ fn parse_args_with(parser: &mut lexopt::Parser, help_message: &str) -> Result<Ar
             Arg::Long("no-std") => options.include_std = false,
             Arg::Long("parse-only") => options.parse_only = true,
             Arg::Long("dump-ast") => options.dump_ast = true,
+            Arg::Long("dump-hir") => options.dump_hir = true,
             Arg::Long("dump-mir") => options.dump_mir = true,
             Arg::Short('h') | Arg::Long("help") => {
                 println!("{help_message}");

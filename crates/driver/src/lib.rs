@@ -19,6 +19,7 @@ pub struct Options {
     pub include_std: bool,
     pub parse_only: bool,
     pub dump_ast: bool,
+    pub dump_hir: bool,
     pub dump_mir: bool,
     pub mode: Mode,
 }
@@ -60,6 +61,10 @@ fn run_passes(src: Source, options: &Options) -> Result<(), diag::Diagnostic> {
 
         infer::infer_program_in(&ctxt, program)
     }?;
+
+    if options.dump_hir {
+        println!("{hir}");
+    }
 
     let _mir = middle::lower_and_transform(&ctxt, &hir);
 
