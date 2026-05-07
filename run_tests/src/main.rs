@@ -26,46 +26,50 @@ fn main() -> Result<(), Box<dyn Error>> {
     for entry in WalkDir::new(test_dir) {
         let entry = entry?;
         let test_path = entry.path();
-        if !test_path.is_dir() {
-            let contents = fs::read_to_string(test_path)?;
 
-            let mut args = Vec::new();
-            let mut found_expected = false;
-            let mut expected = String::new();
-            for line in contents.lines() {
-                if found_expected {
-                    if let Some(line) = line.strip_prefix("-- ") {
-                        expected.push_str(line);
-                        expected.push('\n');
-                    }
-                } else if line.starts_with("-- args:") {
-                    for arg in line.split_whitespace().skip(2) {
-                        args.push(arg);
-                    }
-                    found_expected = true;
-                }
-            }
-            let expected = expected.trim_ascii();
-
-            println!("[Running {} {}]", test_path.display(), args.join(" "));
-
-            let output = Command::new(&command).arg(test_path).args(args).output()?;
-
-            let output = str::from_utf8(if expected.contains("error") {
-                &output.stderr
-            } else {
-                &output.stdout
-            })?;
-            let output = output.trim_ascii();
-
-            let diff = TextDiff::from_lines(expected, output);
-            print!(
-                "{}",
-                diff.unified_diff()
-                    .header("expected", "output")
-                    .missing_newline_hint(false)
-            );
+        // Tests are .fe source files only.
+        if test_path.is_dir() || test_path.extension().is_some_and(|ext| ext != "fe") {
+            continue;
         }
+
+        let contents = fs::read_to_string(test_path)?;
+
+        let mut args = Vec::new();
+        let mut found_expected = false;
+        let mut expected = String::new();
+        for line in contents.lines() {
+            if found_expected {
+                if let Some(line) = line.strip_prefix("-- ") {
+                    expected.push_str(line);
+                    expected.push('\n');
+                }
+            } else if line.starts_with("-- args:") {
+                for arg in line.split_whitespace().skip(2) {
+                    args.push(arg);
+                }
+                found_expected = true;
+            }
+        }
+        let expected = expected.trim_ascii();
+
+        println!("[Running {} {}]", test_path.display(), args.join(" "));
+
+        let output = Command::new(&command).arg(test_path).args(args).output()?;
+
+        let output = str::from_utf8(if expected.contains("error") {
+            &output.stderr
+        } else {
+            &output.stdout
+        })?;
+        let output = output.trim_ascii();
+
+        let diff = TextDiff::from_lines(expected, output);
+        print!(
+            "{}",
+            diff.unified_diff()
+                .header("expected", "output")
+                .missing_newline_hint(false)
+        );
     }
 
     Ok(())
