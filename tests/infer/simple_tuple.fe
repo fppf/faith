@@ -1,0 +1,6 @@
+main =
+  (1, ((), 2))
+
+-- args: --test --no-std --infer-only --dump-hir
+--
+-- (1i32, ((), 2i32))
