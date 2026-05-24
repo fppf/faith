@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let output = Command::new(&command).arg(test_path).args(args).output()?;
 
-        let output = str::from_utf8(if expected.contains("error") {
+        let output = str::from_utf8(if expected.contains("error:") {
             &output.stderr
         } else {
             &output.stdout

@@ -16,11 +16,23 @@ impl fmt::Display for Program<'_> {
     }
 }
 
-// impl<'a> IntoDoc<'a> for Var<'_> {
-//     fn into_doc(self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-//         arena.text(self.to_string())
-//     }
-// }
+impl fmt::Display for Expr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let arena = DocArena::default();
+        let doc = self.to_doc(&arena, Parens::Top);
+
+        doc.pretty_string(PRETTY_WIDTH).fmt(f)
+    }
+}
+
+impl fmt::Display for Pat<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let arena = DocArena::default();
+        let doc = self.to_doc(&arena, Parens::Top);
+
+        doc.pretty_string(PRETTY_WIDTH).fmt(f)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 enum Parens {

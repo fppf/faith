@@ -55,7 +55,6 @@ impl<'t> Infer<'t> {
             ctxt,
             subs: Substitution::new(ctxt),
             variables: Map::default(),
-
             bool_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Bool)),
             unit_ty: Ty::new(ctxt, TyKind::Base(ast::BaseType::Unit)),
             skolem: SkolemId::ZERO,
@@ -67,7 +66,10 @@ impl<'t> Infer<'t> {
             self.infer_comp_unit(import)?;
         }
         self.infer_comp_unit(&mut program.unit)?;
-        self.infer_expr(&mut program.main)?;
+        {
+            let main_ty = self.infer_expr(&mut program.main)?;
+            program.main.typ.replace(self.generalize(main_ty));
+        }
 
         struct ApplyFinalSubstitution<'a, 't> {
             subs: &'a Substitution<'t>,
@@ -90,9 +92,6 @@ impl<'t> Infer<'t> {
             fn visit_expr(&mut self, expr: &mut Expr<'t>) {
                 if let Some(typ) = expr.typ.as_mut() {
                     *typ = self.subs.apply(*typ);
-
-                    // TODO. Make explicit error, disallow
-                    // let-polymorphism
                     assert!(
                         typ.uni_vars().is_empty(),
                         "unexpected unification variables in {typ}"
@@ -215,7 +214,7 @@ impl<'t> Infer<'t> {
             }
         }
 
-        SkolemReplacer {
+        let skol_ty = SkolemReplacer {
             ctxt: self.ctxt,
             skolems: ty
                 .type_vars()
@@ -223,7 +222,10 @@ impl<'t> Infer<'t> {
                 .map(|&var| (var, Skolem::new(self.fresh_skolem(), var.name)))
                 .collect(),
         }
-        .fold(ty)
+        .fold(ty);
+
+        log::trace!("[skolemize] {ty} to {skol_ty}");
+        skol_ty
     }
 
     fn infer_comp_unit(&mut self, unit: &mut CompUnit<'t>) -> Result<(), InferError<'t>> {
@@ -287,7 +289,7 @@ impl<'t> Infer<'t> {
     }
 
     fn infer_var(&mut self, var: &mut Var<'t>) -> Ty<'t> {
-        match &mut var.typ {
+        let typ = match &mut var.typ {
             Some(typ) => *typ,
             None => {
                 let typ = *self
@@ -297,22 +299,17 @@ impl<'t> Infer<'t> {
                 var.typ = Some(typ);
                 typ
             }
-        }
+        };
+        log::trace!("[infer_var] {var} : {typ}");
+        typ
     }
 
     fn infer_expr(&mut self, expr: &mut Expr<'t>) -> Result<Ty<'t>, InferError<'t>> {
+        log::trace!("[infer_expr] {expr}");
+        log::block_in();
+
         let ty = match &mut expr.kind {
-            ExprKind::Var(v) => match &mut v.typ {
-                Some(typ) => *typ,
-                None => {
-                    let typ = *self
-                        .variables
-                        .get(&v.res)
-                        .unwrap_or_else(|| panic!("no type for var {v}"));
-                    v.typ = Some(typ);
-                    typ
-                }
-            },
+            ExprKind::Var(v) => self.infer_var(v),
             ExprKind::Call(head, args) => {
                 let head_span = head.span;
                 let head_ty = self.infer_expr(head)?;
@@ -390,7 +387,7 @@ impl<'t> Infer<'t> {
                 let expected = self.skolemize(t.value);
                 let e_span = e.span;
                 self.check_expr(e.as_mut(), expected, Origin::Generic(e_span, t.span()))?;
-                expected
+                t.value
             }
             ExprKind::Tuple(elems) => {
                 let mut tys = Vec::with_capacity(elems.len());
@@ -451,11 +448,17 @@ impl<'t> Infer<'t> {
             }
         };
         expr.typ = Some(ty);
+
+        log::trace!("[result] {ty}");
+        log::block_out();
         Ok(ty)
     }
 
     /// Infer a type for a pattern.
     fn infer_pat(&mut self, pat: &mut Pat<'t>) -> Result<Ty<'t>, InferError<'t>> {
+        log::trace!("[infer_pat] {pat}");
+        log::block_in();
+
         let ty = match &mut pat.kind {
             PatKind::Wild => self.fresh_var(),
             PatKind::Var(id) => {
@@ -467,15 +470,10 @@ impl<'t> Infer<'t> {
             PatKind::Lit(l) => self.type_from_lit(*l),
             PatKind::Ann(p, t) => {
                 let expected = self.skolemize(t.value);
-                match p.kind {
-                    PatKind::Wild => (),
-                    _ => {
-                        let span = p.span;
-                        let ty = self.infer_pat(p)?;
-                        self.eq(Origin::Generic(span, t.span), ty, expected)?;
-                    }
-                }
-                expected
+                let span = p.span;
+                let ty = self.infer_pat(p)?;
+                self.eq(Origin::Generic(span, t.span), ty, expected)?;
+                t.value
             }
             PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
             PatKind::Cons(cons_var, args) => {
@@ -510,6 +508,9 @@ impl<'t> Infer<'t> {
             PatKind::Or(_pats) => todo!("implement or patterns"),
         };
         pat.typ = Some(ty);
+
+        log::trace!("[result] {ty}");
+        log::block_out();
         Ok(ty)
     }
 
@@ -527,6 +528,9 @@ impl<'t> Infer<'t> {
         expected: Ty<'t>,
         origin: Origin,
     ) -> Result<(), InferError<'t>> {
+        log::trace!("[check_expr] {expr} : {expected} @ {origin:?}");
+        log::block_in();
+
         match (&mut expr.kind, expected.kind()) {
             (ExprKind::Lit(l), TyKind::Base(b)) if l.base_type() == *b => (),
             (ExprKind::Case(scrutinee, arms, _), _) => {
@@ -550,6 +554,8 @@ impl<'t> Infer<'t> {
             }
         }
         expr.typ = Some(expected);
+
+        log::block_out();
         Ok(())
     }
 }
