@@ -27,21 +27,41 @@ struct ClosureConvert<'a> {
 impl<'a> ClosureConvert<'a> {
     fn convert_func(&mut self, func_id: FuncId, in_body: Option<ExprId>) {
         let mut func = std::mem::replace(&mut self.ctxt.funcs[func_id], Func::sentinel());
+        let func_name = func.name;
 
-        let args_set: IndexSet<_> = func.args.iter().copied().collect();
-        let fv = free_vars(self.ctxt, func.body);
-        let env: IndexSet<_> = fv.difference(&args_set).copied().collect();
-        //log::trace!("fv: {:?}, args {:?}", fv, args_set);
+        // The set of variables this closure should close over (the environment) is
+        // computed as those free within the function, i.e., all variables free within
+        // the function body minus the variables bound by the function's arguments.
+        let arg_vars: IndexSet<_> = func.args.iter().copied().collect();
+        let free_body_vars = free_vars(self.ctxt, func.body);
+        let env: IndexSet<_> = free_body_vars.difference(&arg_vars).copied().collect();
 
         // Could avoid making env when env.is_empty()
         // Would require determining which callsites need to be modified
 
+        // The closure-converted function will take an environment as its first argument.
         let env_param_var = self.ctxt.new_var(Sym::intern("~env"));
         func.args.insert(0, env_param_var);
 
-        let func_name = func.name;
-        let func_body = self.ctxt.exprs[func.body].clone();
-        let func_body = self.ctxt.new_expr(func_body.kind);
+        // All free variables within the closure are replaced with accesses to the
+        // environment. E.g., in
+        //
+        //   let x = 1 in
+        //   fn f y = x + y
+        //
+        // x is free in the body of f. Our closure converted function will then be
+        //
+        //   let x = 1 in
+        //   ... x in env at position 1 ...
+        //   fn f ~env y =
+        //      let x = ~env.1 in
+        //      x + y
+        //
+        // Note that we access x at position 1 of the environment, not position 0.
+        // The code pointer will be in position 0, in the style of a "flat" closure
+        // environment representation.
+        let cloned_func_body = self.ctxt.exprs[func.body].clone();
+        let func_body = self.ctxt.new_expr(cloned_func_body.kind);
         let replace_expr = env
             .iter()
             .enumerate()
@@ -49,32 +69,37 @@ impl<'a> ClosureConvert<'a> {
             .fold(func_body, |acc, (i, &lhs)| {
                 self.ctxt.new_expr(ExprKind::Let {
                     lhs,
-                    rhs: Rhs::Proj(env_param_var, i + 1),
+                    rhs: Rhs::Proj(env_param_var, 1 + i),
                     body: acc,
                 })
             });
         self.ctxt.exprs[func.body] = self.ctxt.exprs.remove(replace_expr).unwrap();
+
+        // Proceed and convert the function body.
         self.convert_expr(func.body);
         self.ctxt.funcs[func_id] = func;
 
+        // If we are closure converting a local function definition (lambda).
         if let Some(body_id) = in_body {
-            let body = self.ctxt.exprs[body_id].clone();
-            let body = self.ctxt.new_expr(body.kind);
-
-            let mut env_tuple = Vec::with_capacity(env.len() + 1);
+            // Construct the flat closure representation:
+            //   (code_pointer, free_var_1, ..., free_var_n)
+            let mut env_tuple = Vec::with_capacity(1 + env.len());
             env_tuple.push(Value::Ptr(func_name));
             env_tuple.extend(env.iter().copied().map(|v| Value::Var(v)));
 
+            let cloned_body = self.ctxt.exprs[body_id].clone();
+            let body = self.ctxt.new_expr(cloned_body.kind);
             let new_body = Expr::new(ExprKind::Let {
                 lhs: func_name,
                 rhs: Rhs::Tuple(env_tuple),
                 body,
             });
-
             self.ctxt.exprs[body_id] = new_body;
+
             self.convert_expr(body_id);
         }
 
+        // The function is now hoisted to the top level.
         self.converted_funcs.insert(func_id);
     }
 
@@ -84,6 +109,12 @@ impl<'a> ClosureConvert<'a> {
         match &expr.kind {
             ExprKind::LetFunc { func_id, body } => {
                 self.convert_func(*func_id, Some(*body));
+
+                // We just created a closure converted version of the function
+                // that lives in the top-level. Remove the local version that wraps
+                // this body.
+                self.ctxt.exprs[expr_id] = self.ctxt.exprs.remove(*body).unwrap();
+                return;
             }
             ExprKind::Let {
                 lhs,
