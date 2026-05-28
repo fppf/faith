@@ -22,6 +22,7 @@ use syntax::ast::{
 use crate::{
     DefKind, Res,
     hir::{self, HirVisitor, Var},
+    module_graph::build_module_graph,
     ty::{Adt, Constructor, Ty, TyCtxt, TyKind, TypeVar},
 };
 
@@ -29,6 +30,8 @@ pub fn resolve_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
 ) -> Result<hir::Program<'t>, Diagnostic> {
+    let graph = build_module_graph(program);
+
     Resolver::new(ctxt, program)
         .resolve()
         .map_err(Diagnostic::from)

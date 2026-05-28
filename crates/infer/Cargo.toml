@@ -11,3 +11,4 @@ base = { path = "../base" }
 span = { path = "../span" }
 log = { path = "../log" }
 syntax = { path = "../syntax" }
+petgraph = "0.8.3"
