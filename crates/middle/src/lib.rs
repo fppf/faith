@@ -1,4 +1,4 @@
-mod closure_convert;
+// mod closure_convert;
 mod hoist;
 mod lower;
 mod pretty;
@@ -39,8 +39,8 @@ pub fn lower_and_transform<'t>(
     shrink::shrink(&mut mir);
     log_mir("SHRINK", &mir);
 
-    closure_convert::convert(&mut mir);
-    log_mir("CLOSURE", &mir);
+    // closure_convert::convert(&mut mir);
+    // log_mir("CLOSURE", &mir);
 
     shrink::shrink(&mut mir);
     log_mir("SHRINK", &mir);

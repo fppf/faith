@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc};
+use std::cell::Cell;
 
 use base::hash::{IndexSet, Set};
 use slotmap::{KeyData, SlotMap, new_key_type};
@@ -17,16 +17,34 @@ impl Var {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Ty(Rc<TyKind>);
+pub enum Type {
+    Prim(PrimType),
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TyKind {
-    Var(Var),
+    Generic(Generic),
+
+    App(Var, Vec<Type>),
+
     // n-ary function types
     // t1 t2 -> t3 is not the same as t1 -> t2 -> t3
-    Arrow(Vec<Ty>, Ty),
+    Arrow(Vec<Type>, Box<Type>),
+
+    Tuple(Vec<Type>),
+
+    Vector(Box<Type>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Generic(u32);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PrimType {
+    Unit,
+    Bool,
+    Int32,
+    Str,
+}
+
+new_key_type! { pub struct TypeId; }
 new_key_type! { pub struct FuncId; }
 new_key_type! { pub struct JoinId; }
 new_key_type! { pub struct ExprId; }
@@ -34,14 +52,20 @@ new_key_type! { pub struct CallId; }
 
 #[derive(Default, Debug)]
 pub struct MirCtxt {
+    pub typs: SlotMap<TypeId, Type>,
     pub funcs: SlotMap<FuncId, Func>,
     pub joins: SlotMap<JoinId, Join>,
     pub exprs: SlotMap<ExprId, Expr>,
     pub calls: SlotMap<CallId, Call>,
     var_counter: Cell<u32>,
+    generic_counter: Cell<u32>,
 }
 
 impl MirCtxt {
+    pub fn new_type(&mut self, typ: Type) -> TypeId {
+        self.typs.insert(typ)
+    }
+
     pub fn new_func(&mut self, func: Func) -> FuncId {
         self.funcs.insert(func)
     }
@@ -63,6 +87,12 @@ impl MirCtxt {
         self.var_counter.update(|c| c + 1);
         Var::new(sym, stamp)
     }
+
+    pub fn new_generic(&self) -> Generic {
+        let stamp = self.generic_counter.get();
+        self.generic_counter.update(|c| c + 1);
+        Generic(stamp)
+    }
 }
 
 #[derive(Debug)]
@@ -76,7 +106,6 @@ pub struct Program {
 #[derive(Clone, Debug)]
 pub struct Expr {
     pub kind: ExprKind,
-    //pub ty: Ty,
 }
 
 impl Expr {
