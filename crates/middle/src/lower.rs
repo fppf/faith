@@ -1,5 +1,8 @@
 use base::hash::{IndexSet, Map};
-use infer::{Res, hir, ty::TyCtxt};
+use infer::{
+    Res, hir,
+    ty::{BaseType, TyCtxt, TyKind, TypeVar},
+};
 use span::{Ident, Span, Sym};
 
 use crate::mir::{self, ExprId, JoinId, MirCtxt, Value, Var};
@@ -132,15 +135,18 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     var,
                     expr,
                     recursive,
-                    ..
+                    typ,
+                    expected_typ: _,
                 } => {
                     let name = self.get_or_insert_var(*var);
                     let body = self.lower_expr(expr);
+                    let typ = self.lower_typ(typ.unwrap());
                     let func = self.mir_ctxt.new_func(mir::Func {
                         name,
                         args: vec![],
                         body,
                         recursive: *recursive,
+                        typ,
                     });
                     self.funcs.insert(func);
                 }
@@ -159,6 +165,63 @@ impl<'a, 't> LoweringContext<'a, 't> {
             }
             hir::Lit::Str(s) => mir::Lit::Str(s),
         }
+    }
+
+    fn lower_typ(&mut self, typ: infer::ty::Ty<'t>) -> mir::Type {
+        struct TypeLowerer<'c, 'a, 't> {
+            lower: &'c LoweringContext<'a, 't>,
+            generics: Map<TypeVar, mir::Generic>,
+        }
+
+        impl<'c, 'a, 't> TypeLowerer<'c, 'a, 't> {
+            fn new(lower: &'c LoweringContext<'a, 't>) -> Self {
+                Self {
+                    lower,
+                    generics: Map::default(),
+                }
+            }
+
+            fn lower(&mut self, typ: infer::ty::Ty<'t>) -> mir::Type {
+                match *typ.kind() {
+                    TyKind::Base(base_typ) => mir::Type::Prim(self.lower_base_typ(base_typ)),
+                    TyKind::Var(type_var) => {
+                        let generic = self
+                            .generics
+                            .entry(type_var)
+                            .or_insert_with(|| self.lower.mir_ctxt.new_generic());
+                        mir::Type::Generic(*generic)
+                    }
+                    TyKind::Uni(uni_var) => {
+                        unreachable!("unification variable {uni_var} escaped inference")
+                    }
+                    TyKind::Skolem(skolem) => {
+                        unreachable!("skolem variable {skolem} escaped inference")
+                    }
+                    TyKind::Arrow(arg_typ, ret_typ) => {
+                        mir::Type::Arrow(vec![self.lower(arg_typ)], Box::new(self.lower(ret_typ)))
+                    }
+                    TyKind::Tuple(elem_typs) => mir::Type::Tuple(
+                        elem_typs
+                            .iter()
+                            .map(|&elem_typ| self.lower(elem_typ))
+                            .collect(),
+                    ),
+                    TyKind::Vector(elem_typ) => mir::Type::Vector(Box::new(self.lower(elem_typ))),
+                    TyKind::User(..) | TyKind::App(..) => todo!(),
+                }
+            }
+
+            fn lower_base_typ(&self, base_typ: BaseType) -> mir::PrimType {
+                match base_typ {
+                    BaseType::Unit => mir::PrimType::Unit,
+                    BaseType::Bool => mir::PrimType::Bool,
+                    BaseType::Str => mir::PrimType::Str,
+                    BaseType::Int32 => mir::PrimType::Int32,
+                }
+            }
+        }
+
+        TypeLowerer::new(self).lower(typ)
     }
 
     fn lower_expr(&mut self, expr: &'a hir::Expr<'t>) -> ExprId {
@@ -239,11 +302,14 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
                     )
                 };
+
+                let typ = self.lower_typ(expr.typ.unwrap());
                 let func = mir::Func {
                     name: func_var,
                     args,
                     body,
                     recursive: false,
+                    typ,
                 };
 
                 let let_body = self.lower_expr_ret(Value::Var(func_var), ctx);

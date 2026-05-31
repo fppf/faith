@@ -5,7 +5,8 @@ use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
 use slotmap::Key;
 
 use crate::mir::{
-    CallId, ExprId, ExprKind, FuncId, JoinId, Lit, MirCtxt, Pat, Program, Rhs, Value, Var,
+    CallId, ExprId, ExprKind, FuncId, Generic, JoinId, Lit, MirCtxt, Pat, PrimType, Program, Rhs,
+    Type, Value, Var,
 };
 
 impl fmt::Display for Var {
@@ -171,6 +172,41 @@ impl Pat {
     }
 }
 
+impl fmt::Display for PrimType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrimType::Unit => "()".fmt(f),
+            PrimType::Bool => "bool".fmt(f),
+            PrimType::Int32 => "i32".fmt(f),
+            PrimType::Str => "str".fmt(f),
+        }
+    }
+}
+
+impl Type {
+    pub fn to_doc<'a>(&self, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        match self {
+            Type::Prim(prim_type) => arena.text(prim_type.to_string()),
+            Type::Generic(generic) => arena.text(generic.to_string()),
+            Type::App(var, items) => todo!(),
+            Type::Arrow(arg_typs, ret_typ) => arena
+                .intersperse(
+                    arg_typs.iter().map(|typ| typ.to_doc(arena)),
+                    arena.text(", "),
+                )
+                .space("-> ")
+                .append(ret_typ.to_doc(arena))
+                .parens()
+                .group(),
+            Type::Tuple(typs) => arena
+                .intersperse(typs.iter().map(|typ| typ.to_doc(arena)), arena.text(", "))
+                .enclose("(", ")")
+                .group(),
+            Type::Vector(typ) => typ.to_doc(arena).brackets(),
+        }
+    }
+}
+
 impl FuncId {
     pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
         let func = &ctxt.funcs[self];
@@ -178,7 +214,8 @@ impl FuncId {
             .text("fn")
             .space(func.name)
             .space(arena.intersperse(func.args.iter().copied(), arena.space()))
-            .space("=")
+            .space(": ")
+            .append(func.typ.to_doc(arena))
             .group()
             .append(arena.line())
             .append(func.body.to_doc(ctxt, arena))
@@ -192,7 +229,7 @@ impl JoinId {
             .text("join")
             .space(join.id)
             .space(arena.intersperse(join.args.iter().copied(), arena.space()))
-            .space("=")
+            .space(":")
             .group()
             .append(arena.line())
             .append(join.body.to_doc(ctxt, arena))

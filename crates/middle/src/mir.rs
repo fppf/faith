@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::{cell::Cell, fmt};
 
 use base::hash::{IndexSet, Set};
 use slotmap::{KeyData, SlotMap, new_key_type};
@@ -36,11 +36,18 @@ pub enum Type {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Generic(u32);
 
+impl fmt::Display for Generic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", self.0)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PrimType {
     Unit,
     Bool,
     Int32,
+    // TODO. str is not really a "primative", moreso a builtin
     Str,
 }
 
@@ -298,6 +305,7 @@ pub struct Func {
     pub args: Vec<Var>,
     pub body: ExprId,
     pub recursive: bool,
+    pub typ: Type,
 }
 
 impl Func {
@@ -307,6 +315,7 @@ impl Func {
             args: Vec::new(),
             body: ExprId(KeyData::default()),
             recursive: false,
+            typ: Type::Prim(PrimType::Unit),
         }
     }
 }
