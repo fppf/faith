@@ -138,17 +138,36 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     typ,
                     expected_typ: _,
                 } => {
+                    let hir::ExprKind::Lambda(lambda) = &expr.kind else {
+                        unreachable!()
+                    };
                     let name = self.get_or_insert_var(*var);
-                    let body = self.lower_expr(expr);
+                    let mut args = Vec::with_capacity(lambda.args.len());
+                    let mut binds = Vec::new();
+                    for (i, arg) in lambda.args.iter().enumerate() {
+                        let var = self.acc_lambda_binds(i, arg, &mut binds);
+                        args.push(var);
+                    }
+                    // \p1 .. pn -> e ~>
+                    //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
+                    let body = if binds.is_empty() {
+                        self.lower_expr(&lambda.body)
+                    } else {
+                        self.lower_var_ctx(
+                            binds[0].1,
+                            Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
+                        )
+                    };
+
                     let typ = self.lower_typ(typ.unwrap());
-                    let func = self.mir_ctxt.new_func(mir::Func {
+                    let func_id = self.mir_ctxt.new_func(mir::Func {
                         name,
-                        args: vec![],
+                        args,
                         body,
                         recursive: *recursive,
                         typ,
                     });
-                    self.funcs.insert(func);
+                    self.funcs.insert(func_id);
                 }
             }
         }
@@ -233,6 +252,44 @@ impl<'a, 't> LoweringContext<'a, 't> {
         self.lower_expr_ret(Value::Var(var), ctx)
     }
 
+    fn lower_anonymous_lambda(
+        &mut self,
+        lambda: &'a hir::Lambda<'t>,
+        typ: infer::ty::Ty<'t>,
+    ) -> mir::Func {
+        let func_var_name = if let Some(id) = lambda.name {
+            id.as_str().to_string()
+        } else {
+            "f".to_string()
+        };
+        let (_, func_var) = self.insert_var(&func_var_name);
+        let mut args = Vec::with_capacity(lambda.args.len());
+        let mut binds = Vec::new();
+        for (i, arg) in lambda.args.iter().enumerate() {
+            let var = self.acc_lambda_binds(i, arg, &mut binds);
+            args.push(var);
+        }
+        // \p1 .. pn -> e ~>
+        //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
+        let body = if binds.is_empty() {
+            self.lower_expr(&lambda.body)
+        } else {
+            self.lower_var_ctx(
+                binds[0].1,
+                Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
+            )
+        };
+
+        let typ = self.lower_typ(typ);
+        mir::Func {
+            name: func_var,
+            args,
+            body,
+            recursive: false,
+            typ,
+        }
+    }
+
     fn lower_expr_ctx(&mut self, expr: &'a hir::Expr<'t>, ctx: Ctx<'a, 't>) -> ExprId {
         use hir::ExprKind;
         match &expr.kind {
@@ -280,39 +337,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 Ctx::List(ListKind::Cons, args, 0, Vec::new(), Box::new(ctx)),
             ),
             ExprKind::Lambda(lambda) => {
-                let func_var_name = if let Some(id) = lambda.name {
-                    id.as_str().to_string()
-                } else {
-                    "f".to_string()
-                };
-                let (_, func_var) = self.insert_var(&func_var_name);
-                let mut args = Vec::with_capacity(lambda.args.len());
-                let mut binds = Vec::new();
-                for (i, arg) in lambda.args.iter().enumerate() {
-                    let var = self.acc_lambda_binds(i, arg, &mut binds);
-                    args.push(var);
-                }
-                // \p1 .. pn -> e ~>
-                //   \l1 .. ln -> lower(let p1 = l1, .., pn = ln in e)
-                let body = if binds.is_empty() {
-                    self.lower_expr(&lambda.body)
-                } else {
-                    self.lower_var_ctx(
-                        binds[0].1,
-                        Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
-                    )
-                };
-
-                let typ = self.lower_typ(expr.typ.unwrap());
-                let func = mir::Func {
-                    name: func_var,
-                    args,
-                    body,
-                    recursive: false,
-                    typ,
-                };
-
-                let let_body = self.lower_expr_ret(Value::Var(func_var), ctx);
+                let func = self.lower_anonymous_lambda(lambda, expr.typ.unwrap());
+                let let_body = self.lower_expr_ret(Value::Var(func.name), ctx);
                 let func_id = self.mir_ctxt.new_func(func);
                 self.mir_ctxt.new_expr(mir::ExprKind::LetFunc {
                     func_id,

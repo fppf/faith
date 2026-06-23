@@ -51,7 +51,7 @@ impl<'t> Hash for Var<'t> {
 
 impl<'t> fmt::Display for Var<'t> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.id, self.res)?;
+        write!(f, "{} {}", self.id, self.res)?;
         if let Some(ty) = self.typ {
             write!(f, ":{ty}")?;
         }
