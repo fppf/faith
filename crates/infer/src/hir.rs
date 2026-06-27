@@ -110,7 +110,6 @@ impl<'t> Expr<'t> {
         match &mut self.kind {
             ExprKind::Var(var) => v.visit_var(var),
             ExprKind::Lit(_) => (),
-            ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) => exprs.iter_mut().for_each(|expr| v.visit_expr(expr)),
             ExprKind::Vector(exprs) => exprs.iter_mut().for_each(|expr| v.visit_expr(expr)),
             ExprKind::Case(expr, arms, _) => {
@@ -160,7 +159,6 @@ impl<'t> Expr<'t> {
 pub enum ExprKind<'t> {
     Var(Var<'t>),
     Lit(Lit),
-    Ann(Box<Expr<'t>>, Sp<Ty<'t>>),
     Tuple(Vec<Expr<'t>>),
     Vector(Vec<Expr<'t>>),
     Case(

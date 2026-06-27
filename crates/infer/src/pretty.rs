@@ -151,11 +151,7 @@ impl Expr<'_> {
     // might need to be wrapped in parentheses.
     fn needs_inner_parens(&self) -> bool {
         match &self.kind {
-            ExprKind::Var(_)
-            | ExprKind::Lit(_)
-            | ExprKind::Ann(..)
-            | ExprKind::Tuple(_)
-            | ExprKind::Vector(_) => false,
+            ExprKind::Var(_) | ExprKind::Lit(_) | ExprKind::Tuple(_) | ExprKind::Vector(_) => false,
             ExprKind::Cons(_, args) => !args.is_empty(),
             ExprKind::Case(..)
             | ExprKind::If(..)
@@ -171,12 +167,6 @@ impl Expr<'_> {
         let doc = match &self.kind {
             ExprKind::Var(var) => var.into_doc(arena),
             ExprKind::Lit(lit) => arena.text(lit.to_string()),
-            ExprKind::Ann(expr, typ) => expr
-                .to_doc(arena, Parens::Top)
-                .append(" : ")
-                .append(typ.to_doc(arena, Parens::Top))
-                .group()
-                .parens(),
             ExprKind::Tuple(exprs) => arena
                 .intersperse(
                     exprs.iter().map(|expr| expr.to_doc(arena, Parens::Top)),

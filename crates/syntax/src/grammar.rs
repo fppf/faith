@@ -329,24 +329,18 @@ fn at_type_atom(p: &Parser<'_>) -> bool {
 fn expr_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Expr<'ast>> {
     let m = p.start();
     p.bump(L_PAREN);
+
     let first = expr(p)?;
     if p.eat(R_PAREN) {
         return Ok(first);
     }
-    if p.eat(COLON) {
-        let t = type_(p)?;
-        p.expect_with_span(R_PAREN, m.start)?;
-        return Ok(Expr::new(
-            ExprKind::Ann(alloc!(p, first), alloc!(p, t)),
-            p.end(m),
-            p.next_ast_id(),
-        ));
-    }
+
     let mut elements = vec![first];
     while !p.at(EOF) && p.eat(COMMA) {
         elements.push(expr(p)?);
     }
     p.expect_with_span(R_PAREN, m.start)?;
+
     Ok(Expr::new(
         ExprKind::Tuple(alloc_iter!(p, elements)),
         p.end(m),

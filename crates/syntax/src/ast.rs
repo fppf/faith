@@ -157,7 +157,6 @@ impl<'ast> Expr<'ast> {
 pub enum ExprKind<'ast> {
     Path(Path<'ast>),
     Lit(Lit),
-    Ann(&'ast Expr<'ast>, &'ast Sp<Type<'ast>>),
     Tuple(&'ast [Expr<'ast>]),
     Vector(&'ast [Expr<'ast>]),
     Case(&'ast Expr<'ast>, &'ast [(Pat<'ast>, Expr<'ast>)]),
@@ -269,7 +268,6 @@ impl<'ast> Expr<'ast> {
     {
         match self.kind {
             ExprKind::Path(_) | ExprKind::Lit(_) => (),
-            ExprKind::Ann(expr, _) => v.visit_expr(expr),
             ExprKind::Tuple(exprs) | ExprKind::Vector(exprs) => {
                 exprs.iter().for_each(|expr| v.visit_expr(expr))
             }

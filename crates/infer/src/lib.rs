@@ -384,12 +384,6 @@ impl<'t> Infer<'t> {
                 }
                 self.infer_expr(body.as_mut())?
             }
-            ExprKind::Ann(e, t) => {
-                let expected = self.skolemize(t.value);
-                let e_span = e.span;
-                self.check_expr(e.as_mut(), expected, Origin::Generic(e_span, t.span()))?;
-                t.value
-            }
             ExprKind::Tuple(elems) => {
                 let mut tys = Vec::with_capacity(elems.len());
                 for elem in elems {

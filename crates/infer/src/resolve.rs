@@ -858,11 +858,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let new_e2 = self.with_local_scope(|self_| self_.resolve_expr(e2))?;
                 hir::ExprKind::If(Box::new(new_cond), Box::new(new_e1), Box::new(new_e2))
             }
-            ExprKind::Ann(e, t) => {
-                let new_e = self.resolve_expr(e)?;
-                let ty = self.lower_type(t)?;
-                hir::ExprKind::Ann(Box::new(new_e), Sp::new(ty, t.span))
-            }
             ExprKind::Call(head, args) => {
                 let new_head = self.resolve_expr(head)?;
                 let new_args = self.resolve_exprs(args)?;
