@@ -193,7 +193,6 @@ pub enum PatKind<'ast> {
     Wild,
     Lit(Lit),
     Var(Id),
-    Ann(&'ast Pat<'ast>, &'ast Sp<Type<'ast>>),
     Tuple(&'ast [Pat<'ast>]),
     Cons(Path<'ast>, &'ast [Pat<'ast>]),
     Or(&'ast [Pat<'ast>]),
@@ -319,7 +318,6 @@ impl<'ast> Pat<'ast> {
     {
         match self.kind {
             PatKind::Wild | PatKind::Lit(_) | PatKind::Var(_) => (),
-            PatKind::Ann(pat, _) => v.visit_pat(pat),
             PatKind::Cons(_, pats) | PatKind::Tuple(pats) | PatKind::Or(pats) => {
                 pats.iter().for_each(|pat| v.visit_pat(pat))
             }

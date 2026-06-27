@@ -105,11 +105,7 @@ impl Pat<'_> {
     // might need to be wrapped in parentheses.
     fn needs_inner_parens(&self) -> bool {
         match &self.kind {
-            PatKind::Wild
-            | PatKind::Lit(_)
-            | PatKind::Var(_)
-            | PatKind::Ann(..)
-            | PatKind::Tuple(_) => false,
+            PatKind::Wild | PatKind::Lit(_) | PatKind::Var(_) | PatKind::Tuple(_) => false,
             PatKind::Cons(_, args) => !args.is_empty(),
             PatKind::Or(_) => true,
         }
@@ -120,12 +116,6 @@ impl Pat<'_> {
             PatKind::Wild => arena.text("_"),
             PatKind::Lit(lit) => arena.text(lit.to_string()),
             PatKind::Var(var) => var.into_doc(arena),
-            PatKind::Ann(pat, typ) => pat
-                .to_doc(arena, Parens::Top)
-                .append(" : ")
-                .append(typ.to_doc(arena, Parens::Top))
-                .group()
-                .parens(),
             PatKind::Tuple(pats) => arena
                 .intersperse(pats.iter().map(|pat| pat.to_doc(arena, Parens::Top)), ", ")
                 .group()

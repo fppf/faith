@@ -611,24 +611,18 @@ fn pat_atom<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
 fn pat_paren<'ast>(p: &mut Parser<'ast>) -> ParseResult<Pat<'ast>> {
     let m = p.start();
     p.bump(L_PAREN);
+
     let first = pattern(p)?;
     if p.eat(R_PAREN) {
         return Ok(first);
     }
-    if p.eat(COLON) {
-        let t = type_(p)?;
-        p.expect(R_PAREN)?;
-        return Ok(Pat::new(
-            PatKind::Ann(alloc!(p, first), alloc!(p, t)),
-            p.end(m),
-            p.next_ast_id(),
-        ));
-    }
+
     let mut rest = vec![first];
     while !p.at(EOF) && p.eat(COMMA) {
         rest.push(pattern(p)?);
     }
     p.expect(R_PAREN)?;
+
     Ok(Pat::new(
         PatKind::Tuple(alloc_iter!(p, rest)),
         p.end(m),

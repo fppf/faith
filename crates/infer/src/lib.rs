@@ -469,13 +469,6 @@ impl<'t> Infer<'t> {
                 var
             }
             PatKind::Lit(l) => self.type_from_lit(*l),
-            PatKind::Ann(p, t) => {
-                let expected = self.skolemize(t.value);
-                let span = p.span;
-                let ty = self.infer_pat(p)?;
-                self.eq(Origin::Generic(span, t.span), ty, expected)?;
-                t.value
-            }
             PatKind::Tuple(pats) => Ty::tuple(self.ctxt, self.infer_pats(pats)?),
             PatKind::Cons(cons_var, args) => {
                 let cons_typ = cons_var.typ.unwrap();

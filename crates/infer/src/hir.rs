@@ -204,7 +204,6 @@ impl<'t> Pat<'t> {
             PatKind::Wild => (),
             PatKind::Lit(_) => (),
             PatKind::Var(var) => v.visit_var(var),
-            PatKind::Ann(pat, _) => v.visit_pat(pat),
             PatKind::Tuple(pats) => pats.iter_mut().for_each(|pat| v.visit_pat(pat)),
             PatKind::Cons(var, pats) => {
                 v.visit_var(var);
@@ -220,7 +219,6 @@ pub enum PatKind<'t> {
     Wild,
     Lit(Lit),
     Var(Var<'t>),
-    Ann(Box<Pat<'t>>, Sp<Ty<'t>>),
     Tuple(Vec<Pat<'t>>),
     Cons(Var<'t>, Vec<Pat<'t>>),
     Or(Vec<Pat<'t>>),

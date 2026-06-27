@@ -437,7 +437,6 @@ impl<'t> MatchCompiler<'t> {
                             .2
                             .push(Clause::new(tests.to_vec(), clause.body.clone()));
                     }
-                    PatKind::Ann(_pat, _) => todo!(),
                     _ => (),
                 }
             } else {

@@ -767,11 +767,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
             PatKind::Wild => hir::PatKind::Wild,
             PatKind::Lit(l) => hir::PatKind::Lit(wf_lit(l, pat.span)?),
             PatKind::Var(id) => hir::PatKind::Var(self.make_local(id, None)),
-            PatKind::Ann(p, t) => {
-                let p = self.resolve_pat(p)?;
-                let ty = self.lower_type(t)?;
-                hir::PatKind::Ann(Box::new(p), Sp::new(ty, t.span))
-            }
             PatKind::Tuple(ps) => hir::PatKind::Tuple(self.resolve_pats(ps)?),
             PatKind::Cons(cons, ps) => {
                 let var = self.resolve_path(Namespace::Cons, cons)?;

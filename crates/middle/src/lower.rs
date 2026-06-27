@@ -368,7 +368,6 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 binds.push((idx, temp));
                 var
             }
-            PatKind::Ann(p, _) => self.acc_lambda_binds(idx, p, binds),
             PatKind::Lit(_) => panic!("literal pattern as lambda argument"),
             PatKind::Or(_) => panic!("or pattern as lambda argument"),
             PatKind::Cons(..) => {
@@ -566,7 +565,6 @@ impl<'a, 't> LoweringContext<'a, 't> {
             PatKind::Var(v) => {
                 vec![(self.get_or_insert_var(*v), var, index)]
             }
-            PatKind::Ann(p, _) => self.lower_bind(p, index, var),
             PatKind::Tuple(ps) => {
                 let mut binds = Vec::new();
                 let mut rhs_var = var;
