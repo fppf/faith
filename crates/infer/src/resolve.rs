@@ -831,8 +831,8 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let mut new_binds = Vec::with_capacity(binds.len());
                 for bind in binds.iter() {
                     self_.check_duplicates(&bind.0)?;
-                    let pat = self_.resolve_pat(&bind.0)?;
                     let expr = self_.resolve_expr(&bind.1)?;
+                    let pat = self_.resolve_pat(&bind.0)?;
                     new_binds.push((pat, expr));
                 }
                 let new_body = self_.resolve_expr(body)?;
