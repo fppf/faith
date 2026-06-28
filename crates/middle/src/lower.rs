@@ -38,18 +38,12 @@ enum Ctx<'a, 't> {
         Vec<mir::Value>,
         Box<Ctx<'a, 't>>,
     ),
-    Let(
-        &'a [(hir::Pat<'t>, hir::Expr<'t>)],
-        usize,
-        &'a hir::Expr<'t>,
-        Box<Ctx<'a, 't>>,
-    ),
+    Let(&'a hir::Pat<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
     Lambda(
         &'a [hir::Pat<'t>],
         Vec<(usize, hir::Var<'t>)>,
         usize,
         &'a hir::Expr<'t>,
-        Box<Ctx<'a, 't>>,
     ),
     Seq(&'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
 }
@@ -87,7 +81,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         }
     }
 
-    pub fn get_var(&self, var: hir::Var<'t>) -> mir::Var {
+    fn get_var(&self, var: hir::Var<'t>) -> mir::Var {
         if var.res == Res::dummy() {
             return self.temporaries[&var.id];
         }
@@ -97,7 +91,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             .unwrap_or_else(|| panic!("res_to_var missing {var}"))
     }
 
-    pub fn insert_var(&mut self, name: &str) -> (hir::Var<'t>, mir::Var) {
+    fn create_temporary_variable(&mut self, name: &str) -> (hir::Var<'t>, mir::Var) {
         let mir_var = self.mir_ctxt.new_var(Sym::intern(&format!("~{name}")));
         let id = Ident::new(mir_var.sym, Span::dummy());
         let hir_var = hir::Var::new(id, Res::dummy(), id.span);
@@ -155,7 +149,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     } else {
                         self.lower_var_ctx(
                             binds[0].1,
-                            Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
+                            Ctx::Lambda(&lambda.args, binds, 1, &lambda.body),
                         )
                     };
 
@@ -257,12 +251,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         lambda: &'a hir::Lambda<'t>,
         typ: infer::ty::Ty<'t>,
     ) -> mir::Func {
-        let func_var_name = if let Some(id) = lambda.name {
-            id.as_str().to_string()
-        } else {
-            "f".to_string()
-        };
-        let (_, func_var) = self.insert_var(&func_var_name);
+        let (_, func_var) = self.create_temporary_variable("f");
         let mut args = Vec::with_capacity(lambda.args.len());
         let mut binds = Vec::new();
         for (i, arg) in lambda.args.iter().enumerate() {
@@ -276,7 +265,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         } else {
             self.lower_var_ctx(
                 binds[0].1,
-                Ctx::Lambda(&lambda.args, binds, 1, &lambda.body, Box::new(Ctx::Ret)),
+                Ctx::Lambda(&lambda.args, binds, 1, &lambda.body),
             )
         };
 
@@ -298,7 +287,6 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 let lit = self.lower_lit(*lit);
                 self.lower_expr_ret(Value::Lit(lit), ctx)
             }
-            ExprKind::Ann(e, _) => self.lower_expr_ctx(e, ctx),
             ExprKind::If(cond, e1, e2) => self.lower_expr_ctx(cond, Ctx::If(e1, e2, Box::new(ctx))),
             ExprKind::Case(e, arms, Some(compiled)) => {
                 let branch_var = self.get_or_insert_var(compiled.branch_var);
@@ -345,9 +333,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     body: let_body,
                 })
             }
-            ExprKind::Let(binds, body) => {
-                assert!(!binds.is_empty());
-                self.lower_expr_ctx(&binds[0].1, Ctx::Let(binds, 1, body, Box::new(ctx)))
+            ExprKind::Let(pat, expr, body) => {
+                self.lower_expr_ctx(expr, Ctx::Let(pat, body, Box::new(ctx)))
             }
             ExprKind::Seq(e1, e2) => self.lower_expr_ctx(e1, Ctx::Seq(e2, Box::new(ctx))),
         }
@@ -361,10 +348,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
     ) -> mir::Var {
         use hir::PatKind;
         match &pat.kind {
-            PatKind::Wild => self.insert_var("w").1,
+            PatKind::Wild => self.create_temporary_variable("w").1,
             PatKind::Var(v) => self.get_or_insert_var(*v),
             PatKind::Tuple(_) => {
-                let (temp, var) = self.insert_var("tup");
+                let (temp, var) = self.create_temporary_variable("tup");
                 binds.push((idx, temp));
                 var
             }
@@ -383,7 +370,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 .mir_ctxt
                 .new_expr(mir::ExprKind::Jump(join_id, vec![value])),
             Ctx::If(e1, e2, ctx) => {
-                let (_, join_arg) = self.insert_var("p");
+                let join_arg = self.create_temporary_variable("p").1;
                 let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
                 let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let e1 = self.lower_expr_ctx(e1, Ctx::Jump(join_id));
@@ -400,8 +387,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     body,
                 })
             }
-            Ctx::Case(_branch_var, arms, compiled, ctx) => {
-                let (_, join_arg) = self.insert_var("p");
+            Ctx::Case(branch_var, arms, compiled, ctx) => {
+                let join_arg = self.create_temporary_variable("p").1;
                 let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
                 let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let tree = self.lower_decision_tree(join_id, &compiled.tree, arms);
@@ -410,7 +397,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     body: tree,
                 });
                 self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: self.get_var(compiled.branch_var),
+                    lhs: branch_var,
                     rhs: mir::Rhs::Value(value),
                     body: let_join,
                 })
@@ -418,7 +405,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             Ctx::List(kind, exprs, index, mut values, ctx) => {
                 values.push(value);
                 if index == exprs.len() {
-                    let (_, tmp) = self.insert_var("t");
+                    let tmp = self.create_temporary_variable("t").1;
                     let rhs = match kind {
                         ListKind::Call => {
                             let (func, args) = values.split_first().unwrap();
@@ -458,49 +445,48 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     )
                 }
             }
-            Ctx::Let(binds, index, body, ctx) => {
-                let (pat, expr) = &binds[index - 1];
-                let (_, mut tmp) = self.insert_var("t");
-                let lowered_binds = match pat.kind {
-                    hir::PatKind::Var(id) => {
-                        tmp = self.get_or_insert_var(id);
-                        Vec::new()
-                    }
-                    _ => self.lower_bind(pat, 0, tmp),
-                };
-                let body = if index == binds.len() {
-                    self.lower_expr_ctx(body, *ctx)
-                } else {
-                    self.lower_expr_ctx(expr, Ctx::Let(binds, index + 1, body, ctx))
-                };
-                let body = if lowered_binds.is_empty() {
-                    body
-                } else {
-                    lowered_binds
-                        .into_iter()
-                        .rev()
-                        .fold(body, |acc, (lhs, rhs, i)| {
-                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
+            Ctx::Let(pat, body, ctx) => {
+                let mut new_binds = Vec::new();
+
+                let bind_var = match pat.kind {
+                    hir::PatKind::Var(id) => self.get_or_insert_var(id),
+                    _ => {
+                        let tmp = self.create_temporary_variable("t").1;
+
+                        for (lhs, rhs, index) in self.lower_bind(pat, 0, tmp) {
+                            new_binds.push((
                                 lhs,
-                                rhs: if i > 0 {
-                                    mir::Rhs::Proj(rhs, i - 1)
+                                if index > 0 {
+                                    mir::Rhs::Proj(rhs, index - 1)
                                 } else {
                                     mir::Rhs::Value(Value::Var(rhs))
                                 },
-                                body: acc,
-                            })
-                        })
+                            ));
+                        }
+
+                        tmp
+                    }
                 };
+
+                let body = self.lower_expr_ctx(body, *ctx);
+                let body = new_binds.into_iter().rev().fold(body, |acc, (lhs, rhs)| {
+                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
+                        lhs,
+                        rhs,
+                        body: acc,
+                    })
+                });
+
                 self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: tmp,
+                    lhs: bind_var,
                     rhs: mir::Rhs::Value(value),
                     body,
                 })
             }
-            Ctx::Lambda(args, binds, index, body, ctx) => {
+            Ctx::Lambda(args, binds, index, body) => {
                 let (i, var) = &binds[index - 1];
                 let pat = &args[*i];
-                let (_, mut tmp) = self.insert_var("t");
+                let mut tmp = self.create_temporary_variable("t").1;
                 let lowered_binds = match pat.kind {
                     hir::PatKind::Var(id) => {
                         tmp = self.get_or_insert_var(id);
@@ -509,9 +495,9 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     _ => self.lower_bind(pat, 0, tmp),
                 };
                 let body = if index == binds.len() {
-                    self.lower_expr_ctx(body, *ctx)
+                    self.lower_expr_ctx(body, Ctx::Ret)
                 } else {
-                    self.lower_var_ctx(*var, Ctx::Lambda(args, binds, index + 1, body, ctx))
+                    self.lower_var_ctx(*var, Ctx::Lambda(args, binds, index + 1, body))
                 };
                 let body = if lowered_binds.is_empty() {
                     body
@@ -538,7 +524,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 })
             }
             Ctx::Seq(e2, ctx) => {
-                let (_, unused) = self.insert_var("seq");
+                let (_, unused) = self.create_temporary_variable("seq");
                 let e2 = self.lower_expr_ctx(e2, *ctx);
                 self.mir_ctxt.new_expr(mir::ExprKind::Let {
                     lhs: unused,
@@ -559,21 +545,21 @@ impl<'a, 't> LoweringContext<'a, 't> {
         match &pat.kind {
             PatKind::Lit(_) => panic!("literal pattern as LHS of bind"),
             PatKind::Wild => {
-                let (_, unused) = self.insert_var("w");
+                let unused = self.create_temporary_variable("w").1;
                 vec![(unused, var, index)]
             }
             PatKind::Var(v) => {
                 vec![(self.get_or_insert_var(*v), var, index)]
             }
-            PatKind::Tuple(ps) => {
+            PatKind::Tuple(pats) => {
                 let mut binds = Vec::new();
                 let mut rhs_var = var;
                 if index > 0 {
-                    let (_, new_var) = self.insert_var("tup");
+                    let new_var = self.create_temporary_variable("tup").1;
                     binds.push((new_var, var, index));
                     rhs_var = new_var;
                 }
-                for (i, p) in ps.iter().enumerate() {
+                for (i, p) in pats.iter().enumerate() {
                     binds.extend(self.lower_bind(p, i + 1, rhs_var));
                 }
                 binds
