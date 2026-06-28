@@ -71,10 +71,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
         }
     }
 
-    fn get_or_insert_var(&mut self, var: hir::Var<'t>) -> mir::Var {
+    fn create_var(&mut self, var: hir::Var<'t>) -> mir::Var {
         let res = var.res;
         match self.res_to_var.get(&res) {
-            Some(var) => *var,
+            Some(_var) => unreachable!(),
             None => {
                 let var = self.mir_ctxt.new_var(var.id.sym);
                 self.res_to_var.insert(res, var);
@@ -94,7 +94,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             .unwrap_or_else(|| panic!("res_to_var missing {var}"))
     }
 
-    fn create_temporary_variable(&mut self, name: &str) -> mir::Var {
+    fn create_temporary_var(&mut self, name: &str) -> mir::Var {
         let mir_var = self.mir_ctxt.new_var(Sym::intern(&format!("~{name}")));
         let id = Ident::new(mir_var.sym, Span::dummy());
         self.temporaries.insert(id, mir_var);
@@ -104,7 +104,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
     fn lower(mut self) -> mir::Program {
         for adt in self.ctxt.adts.borrow().values() {
             for cons in adt.constructors.values() {
-                self.get_or_insert_var(cons.var);
+                self.create_var(cons.var);
             }
         }
         for import in self.program.imports.values() {
@@ -137,7 +137,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     let hir::ExprKind::Lambda(lambda) = &expr.kind else {
                         unreachable!()
                     };
-                    let name = self.get_or_insert_var(*var);
+                    let name = self.create_var(*var);
                     let mut args = Vec::with_capacity(lambda.args.len());
                     let mut binds = Vec::new();
                     for (i, arg) in lambda.args.iter().enumerate() {
@@ -253,7 +253,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
         lambda: &'a hir::Lambda<'t>,
         typ: infer::ty::Ty<'t>,
     ) -> mir::Func {
-        let func_var = self.create_temporary_variable("f");
+        let func_var = self.create_temporary_var("f");
         let mut args = Vec::with_capacity(lambda.args.len());
         let mut binds = Vec::new();
         for (i, arg) in lambda.args.iter().enumerate() {
@@ -291,7 +291,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             }
             ExprKind::If(cond, e1, e2) => self.lower_expr_ctx(cond, Ctx::If(e1, e2, Box::new(ctx))),
             ExprKind::Case(e, arms, Some(compiled)) => {
-                let branch_var = self.get_or_insert_var(compiled.branch_var);
+                let branch_var = self.create_var(compiled.branch_var);
                 self.lower_expr_ctx(e, Ctx::Case(branch_var, arms, compiled, Box::new(ctx)))
             }
             ExprKind::Case(_, _, None) => unreachable!(),
@@ -317,7 +317,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 Ctx::List(ListKind::Call, args, 0, Vec::new(), Box::new(ctx)),
             ),
             ExprKind::ExternalCall(ext_var, args) => {
-                let ext_var = self.get_or_insert_var(*ext_var);
+                let ext_var = self.create_var(*ext_var);
                 let args: Vec<_> = args.iter().map(|&var| self.get_var(var)).collect();
                 self.mir_ctxt
                     .new_expr(mir::ExprKind::ExternalCall(ext_var, args))
@@ -350,10 +350,10 @@ impl<'a, 't> LoweringContext<'a, 't> {
     ) -> mir::Var {
         use hir::PatKind;
         match &pat.kind {
-            PatKind::Wild => self.create_temporary_variable("w"),
-            PatKind::Var(v) => self.get_or_insert_var(*v),
+            PatKind::Wild => self.create_temporary_var("w"),
+            PatKind::Var(v) => self.create_var(*v),
             PatKind::Tuple(_) => {
-                let var = self.create_temporary_variable("tup");
+                let var = self.create_temporary_var("tup");
                 binds.push((idx, var));
                 var
             }
@@ -372,7 +372,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 .mir_ctxt
                 .new_expr(mir::ExprKind::Jump(join_id, vec![value])),
             Ctx::If(e1, e2, ctx) => {
-                let join_arg = self.create_temporary_variable("p");
+                let join_arg = self.create_temporary_var("p");
                 let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
                 let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let e1 = self.lower_expr_ctx(e1, Ctx::Jump(join_id));
@@ -388,7 +388,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     .new_expr(mir::ExprKind::LetJoin { join_id, body })
             }
             Ctx::Case(branch_var, arms, compiled, ctx) => {
-                let join_arg = self.create_temporary_variable("p");
+                let join_arg = self.create_temporary_var("p");
                 let join_body = self.lower_expr_ret(Value::Var(join_arg), *ctx);
                 let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let tree = self.lower_decision_tree(join_id, &compiled.tree, arms);
@@ -406,14 +406,14 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 self.create_binding(bind_var, mir::Rhs::Value(value), body)
             }
             Ctx::Seq(e2, ctx) => {
-                let unused_var = self.create_temporary_variable("seq");
+                let unused_var = self.create_temporary_var("seq");
                 let e2 = self.lower_expr_ctx(e2, *ctx);
                 self.create_binding(unused_var, mir::Rhs::Value(value), e2)
             }
             Ctx::List(kind, exprs, index, mut values, ctx) => {
                 values.push(value);
                 if index == exprs.len() {
-                    let tmp = self.create_temporary_variable("t");
+                    let tmp = self.create_temporary_var("t");
                     let rhs = match kind {
                         ListKind::Call => {
                             let (func, args) = values.split_first().unwrap();
@@ -486,9 +486,9 @@ impl<'a, 't> LoweringContext<'a, 't> {
         let mut new_binds = Vec::new();
 
         let bind_var = match pat.kind {
-            hir::PatKind::Var(id) => self.get_or_insert_var(id),
+            hir::PatKind::Var(id) => self.create_var(id),
             _ => {
-                let tmp = self.create_temporary_variable("t");
+                let tmp = self.create_temporary_var("t");
 
                 for (lhs, rhs, index) in self.lower_bind(pat, 0, tmp) {
                     new_binds.push((
@@ -518,17 +518,17 @@ impl<'a, 't> LoweringContext<'a, 't> {
         match &pat.kind {
             PatKind::Lit(_) => panic!("literal pattern as LHS of bind"),
             PatKind::Wild => {
-                let unused_var = self.create_temporary_variable("w");
+                let unused_var = self.create_temporary_var("w");
                 vec![(unused_var, var, index)]
             }
             PatKind::Var(v) => {
-                vec![(self.get_or_insert_var(*v), var, index)]
+                vec![(self.create_var(*v), var, index)]
             }
             PatKind::Tuple(pats) => {
                 let mut binds = Vec::new();
                 let mut rhs_var = var;
                 if index > 0 {
-                    let new_var = self.create_temporary_variable("tup");
+                    let new_var = self.create_temporary_var("tup");
                     binds.push((new_var, var, index));
                     rhs_var = new_var;
                 }
@@ -563,7 +563,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     .iter()
                     .map(|&(v1, v2)| {
                         (
-                            self.get_or_insert_var(v1),
+                            self.create_var(v1),
                             mir::Rhs::Value(Value::Var(self.get_var(v2))),
                         )
                     })
@@ -578,11 +578,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
 
                 let mut case_arms = Vec::new();
                 for case in cases {
-                    let vars: Vec<_> = case
-                        .variables
-                        .iter()
-                        .map(|&v| self.get_or_insert_var(v))
-                        .collect();
+                    let vars: Vec<_> = case.variables.iter().map(|&v| self.create_var(v)).collect();
 
                     use hir::Constructor;
                     let pat = match case.constructor {
