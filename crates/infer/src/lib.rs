@@ -372,16 +372,14 @@ impl<'t> Infer<'t> {
                 let body_ty = self.infer_expr(lambda.body.as_mut())?;
                 Ty::n_arrow(self.ctxt, arg_tys, body_ty)
             }
-            ExprKind::Let(binds, body) => {
-                for (pat, bind) in binds {
-                    let pat_span = pat.span;
-                    let pat_ty = self.infer_pat(pat)?;
+            ExprKind::Let(pat, bind, body) => {
+                let pat_span = pat.span;
+                let pat_ty = self.infer_pat(pat)?;
 
-                    let bind_span = bind.span;
-                    let bind_ty = self.infer_expr(bind)?;
+                let bind_span = bind.span;
+                let bind_ty = self.infer_expr(bind)?;
 
-                    self.eq(Origin::Generic(pat_span, bind_span), pat_ty, bind_ty)?;
-                }
+                self.eq(Origin::Generic(pat_span, bind_span), pat_ty, bind_ty)?;
                 self.infer_expr(body.as_mut())?
             }
             ExprKind::Tuple(elems) => {

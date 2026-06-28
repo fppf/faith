@@ -827,17 +827,29 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 }
             }
             ExprKind::Lambda(lambda) => self.resolve_lambda(lambda, None)?,
-            ExprKind::Let(binds, body) => self.with_local_scope(|self_| {
-                let mut new_binds = Vec::with_capacity(binds.len());
-                for bind in binds.iter() {
-                    self_.check_duplicates(&bind.0)?;
-                    let expr = self_.resolve_expr(&bind.1)?;
-                    let pat = self_.resolve_pat(&bind.0)?;
-                    new_binds.push((pat, expr));
-                }
-                let new_body = self_.resolve_expr(body)?;
-                Ok(hir::ExprKind::Let(new_binds, Box::new(new_body)))
-            })?,
+            ExprKind::Let(binds, body) => {
+                return self.with_local_scope(|self_| {
+                    let mut new_binds = Vec::with_capacity(binds.len());
+                    for bind in binds.iter() {
+                        self_.check_duplicates(&bind.0)?;
+                        let expr = self_.resolve_expr(&bind.1)?;
+                        let pat = self_.resolve_pat(&bind.0)?;
+                        new_binds.push((pat, expr));
+                    }
+                    let new_body = self_.resolve_expr(body)?;
+                    Ok(new_binds
+                        .into_iter()
+                        .rev()
+                        .fold(new_body, |acc, (pat, expr)| {
+                            let span = pat.span.merge(expr.span);
+                            hir::Expr::new(
+                                hir::ExprKind::Let(pat, Box::new(expr), Box::new(acc)),
+                                span,
+                                None,
+                            )
+                        }))
+                });
+            }
             ExprKind::Case(e, arms) => {
                 let new_e = self.resolve_expr(e)?;
                 let mut new_arms = Vec::with_capacity(arms.len());

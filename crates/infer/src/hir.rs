@@ -140,12 +140,10 @@ impl<'t> Expr<'t> {
                 v.visit_var(cons);
                 args.iter_mut().for_each(|arg| v.visit_expr(arg));
             }
-            ExprKind::Let(binds, expr) => {
-                binds.iter_mut().for_each(|(pat, expr)| {
-                    v.visit_pat(pat);
-                    v.visit_expr(expr);
-                });
+            ExprKind::Let(pat, expr, body) => {
+                v.visit_pat(pat);
                 v.visit_expr(expr);
+                v.visit_expr(body);
             }
             ExprKind::Seq(expr1, expr2) => {
                 v.visit_expr(expr1);
@@ -171,7 +169,7 @@ pub enum ExprKind<'t> {
     Call(Box<Expr<'t>>, Vec<Expr<'t>>),
     ExternalCall(Var<'t>, Vec<Var<'t>>),
     Cons(Var<'t>, Vec<Expr<'t>>),
-    Let(Vec<(Pat<'t>, Expr<'t>)>, Box<Expr<'t>>),
+    Let(Pat<'t>, Box<Expr<'t>>, Box<Expr<'t>>),
     Seq(Box<Expr<'t>>, Box<Expr<'t>>),
 }
 

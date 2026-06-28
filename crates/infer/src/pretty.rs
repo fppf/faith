@@ -242,36 +242,18 @@ impl Expr<'_> {
                         .group()
                 }
             }
-            ExprKind::Let(binds, expr) => {
-                let binds = if binds.len() == 1 {
-                    let (p, e) = &binds[0];
-                    arena
-                        .space()
-                        .append(p.to_doc(arena, Parens::Top))
-                        .append(" = ")
-                        .append(e.to_doc(arena, Parens::Top))
-                        .append(" ")
-                } else {
-                    arena
-                        .line()
-                        .append(arena.intersperse(
-                            binds.iter().map(|(p, e)| {
-                                p.to_doc(arena, Parens::Top)
-                                    .append(" = ")
-                                    .append(e.to_doc(arena, Parens::Top))
-                                    .group()
-                            }),
-                            arena.text(",").append(arena.line()),
-                        ))
-                        .append(",")
-                        .nest(2)
-                        .append(arena.line())
-                };
+            ExprKind::Let(pat, expr, body) => {
+                let bind = arena
+                    .space()
+                    .append(pat.to_doc(arena, Parens::Top))
+                    .append(" = ")
+                    .append(expr.to_doc(arena, Parens::Top))
+                    .append(" ");
                 arena
                     .text("let")
-                    .append(binds)
+                    .append(bind)
                     .append("in")
-                    .space(expr.to_doc(arena, Parens::Inner))
+                    .space(body.to_doc(arena, Parens::Inner))
             }
             ExprKind::Seq(expr1, expr2) => expr1
                 .to_doc(arena, Parens::Top)
