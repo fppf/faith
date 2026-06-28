@@ -24,6 +24,7 @@ struct LoweringContext<'a, 't> {
 enum Ctx<'a, 't> {
     Ret,
     Jump(JoinId),
+
     If(&'a hir::Expr<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
     Case(
         mir::Var,
@@ -31,6 +32,10 @@ enum Ctx<'a, 't> {
         &'a hir::CompiledCase<'t>,
         Box<Ctx<'a, 't>>,
     ),
+
+    Let(&'a hir::Pat<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
+    Seq(&'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
+
     List(
         ListKind,
         &'a [hir::Expr<'t>],
@@ -38,14 +43,12 @@ enum Ctx<'a, 't> {
         Vec<mir::Value>,
         Box<Ctx<'a, 't>>,
     ),
-    Let(&'a hir::Pat<'t>, &'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
     Lambda(
         &'a [hir::Pat<'t>],
         Vec<(usize, hir::Var<'t>)>,
         usize,
         &'a hir::Expr<'t>,
     ),
-    Seq(&'a hir::Expr<'t>, Box<Ctx<'a, 't>>),
 }
 
 enum ListKind {
@@ -382,10 +385,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         (mir::Pat::Lit(mir::Lit::Bool(false)), e2),
                     ],
                 ));
-                self.mir_ctxt.new_expr(mir::ExprKind::LetJoin {
-                    join_id: join_id,
-                    body,
-                })
+                self.mir_ctxt
+                    .new_expr(mir::ExprKind::LetJoin { join_id, body })
             }
             Ctx::Case(branch_var, arms, compiled, ctx) => {
                 let join_arg = self.create_temporary_variable("p").1;
@@ -393,14 +394,22 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 let join_id = self.mir_ctxt.new_join(vec![join_arg], join_body);
                 let tree = self.lower_decision_tree(join_id, &compiled.tree, arms);
                 let let_join = self.mir_ctxt.new_expr(mir::ExprKind::LetJoin {
-                    join_id: join_id,
+                    join_id,
                     body: tree,
                 });
-                self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: branch_var,
-                    rhs: mir::Rhs::Value(value),
-                    body: let_join,
-                })
+                self.create_binding(branch_var, mir::Rhs::Value(value), let_join)
+            }
+            Ctx::Let(pat, body, ctx) => {
+                let (bind_var, new_binds) = self.bindings_for_pattern(pat);
+
+                let body = self.lower_expr_ctx(body, *ctx);
+                let body = self.wrap_bindings(new_binds, body);
+                self.create_binding(bind_var, mir::Rhs::Value(value), body)
+            }
+            Ctx::Seq(e2, ctx) => {
+                let (_, unused) = self.create_temporary_variable("seq");
+                let e2 = self.lower_expr_ctx(e2, *ctx);
+                self.create_binding(unused, mir::Rhs::Value(value), e2)
             }
             Ctx::List(kind, exprs, index, mut values, ctx) => {
                 values.push(value);
@@ -433,11 +442,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     };
 
                     let body = self.lower_expr_ret(Value::Var(tmp), *ctx);
-                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                        lhs: tmp,
-                        rhs,
-                        body,
-                    })
+                    self.create_binding(tmp, rhs, body)
                 } else {
                     self.lower_expr_ctx(
                         &exprs[index],
@@ -445,94 +450,63 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     )
                 }
             }
-            Ctx::Let(pat, body, ctx) => {
-                let mut new_binds = Vec::new();
-
-                let bind_var = match pat.kind {
-                    hir::PatKind::Var(id) => self.get_or_insert_var(id),
-                    _ => {
-                        let tmp = self.create_temporary_variable("t").1;
-
-                        for (lhs, rhs, index) in self.lower_bind(pat, 0, tmp) {
-                            new_binds.push((
-                                lhs,
-                                if index > 0 {
-                                    mir::Rhs::Proj(rhs, index - 1)
-                                } else {
-                                    mir::Rhs::Value(Value::Var(rhs))
-                                },
-                            ));
-                        }
-
-                        tmp
-                    }
-                };
-
-                let body = self.lower_expr_ctx(body, *ctx);
-                let body = new_binds.into_iter().rev().fold(body, |acc, (lhs, rhs)| {
-                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                        lhs,
-                        rhs,
-                        body: acc,
-                    })
-                });
-
-                self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: bind_var,
-                    rhs: mir::Rhs::Value(value),
-                    body,
-                })
-            }
             Ctx::Lambda(args, binds, index, body) => {
-                let (i, var) = &binds[index - 1];
-                let pat = &args[*i];
-                let mut tmp = self.create_temporary_variable("t").1;
-                let lowered_binds = match pat.kind {
-                    hir::PatKind::Var(id) => {
-                        tmp = self.get_or_insert_var(id);
-                        Vec::new()
-                    }
-                    _ => self.lower_bind(pat, 0, tmp),
-                };
+                let (arg_index, var) = &binds[index - 1];
+                let pat = &args[*arg_index];
+
+                let (bind_var, new_binds) = self.bindings_for_pattern(pat);
+
                 let body = if index == binds.len() {
-                    self.lower_expr_ctx(body, Ctx::Ret)
+                    self.lower_expr(body)
                 } else {
                     self.lower_var_ctx(*var, Ctx::Lambda(args, binds, index + 1, body))
                 };
-                let body = if lowered_binds.is_empty() {
-                    body
-                } else {
-                    lowered_binds
-                        .into_iter()
-                        .rev()
-                        .fold(body, |acc, (lhs, rhs, i)| {
-                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                                lhs,
-                                rhs: if i > 0 {
-                                    mir::Rhs::Proj(rhs, i - 1)
-                                } else {
-                                    mir::Rhs::Value(Value::Var(rhs))
-                                },
-                                body: acc,
-                            })
-                        })
-                };
-                self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: tmp,
-                    rhs: mir::Rhs::Value(value),
-                    body,
-                })
-            }
-            Ctx::Seq(e2, ctx) => {
-                let (_, unused) = self.create_temporary_variable("seq");
-                let e2 = self.lower_expr_ctx(e2, *ctx);
-                self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                    lhs: unused,
-                    rhs: mir::Rhs::Value(value),
-                    body: e2,
-                })
+
+                let body = self.wrap_bindings(new_binds, body);
+                self.create_binding(bind_var, mir::Rhs::Value(value), body)
             }
         }
+    }
+
+    fn create_binding(&mut self, lhs: mir::Var, rhs: mir::Rhs, body: ExprId) -> ExprId {
+        self.mir_ctxt
+            .new_expr(mir::ExprKind::Let { lhs, rhs, body })
+    }
+
+    fn wrap_bindings(&mut self, binds: Vec<(mir::Var, mir::Rhs)>, body: ExprId) -> ExprId {
+        binds
+            .into_iter()
+            .rev()
+            .fold(body, |acc, (lhs, rhs)| self.create_binding(lhs, rhs, acc))
+    }
+
+    fn bindings_for_pattern(
+        &mut self,
+        pat: &'a hir::Pat<'t>,
+    ) -> (mir::Var, Vec<(mir::Var, mir::Rhs)>) {
+        let mut new_binds = Vec::new();
+
+        let bind_var = match pat.kind {
+            hir::PatKind::Var(id) => self.get_or_insert_var(id),
+            _ => {
+                let tmp = self.create_temporary_variable("t").1;
+
+                for (lhs, rhs, index) in self.lower_bind(pat, 0, tmp) {
+                    new_binds.push((
+                        lhs,
+                        if index > 0 {
+                            mir::Rhs::Proj(rhs, index - 1)
+                        } else {
+                            mir::Rhs::Value(Value::Var(rhs))
+                        },
+                    ));
+                }
+
+                tmp
+            }
+        };
+
+        (bind_var, new_binds)
     }
 
     fn lower_bind(
@@ -588,19 +562,17 @@ impl<'a, 't> LoweringContext<'a, 't> {
                 let binds: Vec<_> = body
                     .binds
                     .iter()
-                    .map(|&(v1, v2)| (self.get_or_insert_var(v1), self.get_var(v2)))
+                    .map(|&(v1, v2)| {
+                        (
+                            self.get_or_insert_var(v1),
+                            mir::Rhs::Value(Value::Var(self.get_var(v2))),
+                        )
+                    })
                     .collect();
 
                 let action = &arms[body.action].1;
                 let body = self.lower_expr_ctx(action, Ctx::Jump(join_id));
-
-                binds.into_iter().rev().fold(body, |acc, (lhs, rhs)| {
-                    self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                        lhs,
-                        rhs: mir::Rhs::Value(Value::Var(rhs)),
-                        body: acc,
-                    })
-                })
+                self.wrap_bindings(binds, body)
             }
             hir::DecisionTree::Switch(branch_var, cases) => {
                 let branch_var = self.get_var(*branch_var);
@@ -630,11 +602,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
                         .enumerate()
                         .rev()
                         .fold(expr, |acc, (i, var)| {
-                            self.mir_ctxt.new_expr(mir::ExprKind::Let {
-                                lhs: var,
-                                rhs: mir::Rhs::Proj(branch_var, i),
-                                body: acc,
-                            })
+                            self.create_binding(var, mir::Rhs::Proj(branch_var, i), acc)
                         });
                     case_arms.push((pat, expr));
                 }
