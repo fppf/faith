@@ -1,3 +1,5 @@
+use std::fmt;
+
 use span::diag::{Diagnostic, Label, Level};
 
 use crate::{
@@ -26,8 +28,25 @@ pub struct TypeUnifyError<'t> {
 
 pub enum TypeUnifyErrorKind<'t> {
     Mismatch(Ty<'t>, Ty<'t>),
-    Length(usize, usize),
+    Arity(ArityKind, usize, usize),
     Occurs(UniVarId, Ty<'t>),
+}
+
+pub enum ArityKind {
+    Tuple,
+    Cons,
+    Func,
+}
+
+impl fmt::Display for ArityKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArityKind::Tuple => "tuple type",
+            ArityKind::Cons => "type constructor",
+            ArityKind::Func => "function type",
+        }
+        .fmt(f)
+    }
 }
 
 impl<'t> TypeUnifyError<'t> {
@@ -38,8 +57,8 @@ impl<'t> TypeUnifyError<'t> {
     fn diagnostic(self) -> Diagnostic {
         let message = match self.kind {
             TypeUnifyErrorKind::Mismatch(t1, t2) => format!("cannot unify types {t1} and {t2}"),
-            TypeUnifyErrorKind::Length(l1, l2) => {
-                format!("cannot unify type tuple of length {l1} with type tuple of length {l2}")
+            TypeUnifyErrorKind::Arity(kind, l1, l2) => {
+                format!("cannot unify {kind} of arity {l1} with {kind} of arity {l2}")
             }
             TypeUnifyErrorKind::Occurs(v, t) => {
                 format!("unification variable {v} occurs inside type {t}")

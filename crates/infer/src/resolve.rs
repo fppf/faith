@@ -555,54 +555,39 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let ident = id.ident;
                 seen.update(Namespace::Value, ident)?;
 
-                // Given an external declaration
-                //   external f : t = "symbol"
-                // where t is an n-ary arrow type, generate the top-level lambda definition
-                //   let f = \a_1 .. a_n -> external_call(f, a_1, .., a_n)
-                //
-                // This forces all calls to the external f to be directly applied with
-                // the expected arity, while still permitting user code to use curried
-                // versions.
-
                 let typ = self.lower_type(ast_typ)?;
-                if !matches!(typ.kind(), TyKind::Arrow(_, _)) {
-                    return Err(ResolveError::ExternalTypeNotArrow(
-                        ident.sym,
-                        ast_typ.span(),
-                    ));
-                }
 
                 let ext_res = Res::Def(DefKind::Value, self.ctxt.new_res_id());
                 let ext_var = self.make_external_var(id, ext_res, typ, mapped_to.sym);
 
-                let mut args = Vec::new();
-                {
-                    let mut arrow = typ;
-                    let mut count = 1;
-                    while let TyKind::Arrow(from, to) = arrow.kind() {
-                        let arg_var = self.make_local(
-                            Id::new(
-                                Ident::new(Sym::intern(&format!("a{count}")), Span::dummy()),
-                                AstId::ZERO,
-                            ),
-                            Some(*from),
-                        );
-                        args.push(arg_var);
+                let TyKind::Arrow(typ_args, _) = typ.kind() else {
+                    return Err(ResolveError::ExternalTypeNotArrow(
+                        ident.sym,
+                        ast_typ.span(),
+                    ));
+                };
 
-                        arrow = *to;
-                        count += 1;
-                    }
+                let mut func_args = Vec::new();
+                for (i, &arg) in typ_args.iter().enumerate() {
+                    let arg_var = self.make_local(
+                        Id::new(
+                            Ident::new(Sym::intern(&format!("a{i}")), Span::dummy()),
+                            AstId::ZERO,
+                        ),
+                        Some(arg),
+                    );
+                    func_args.push(arg_var);
                 }
 
                 let external_lambda = hir::Expr::new(
                     hir::ExprKind::Lambda(hir::Lambda {
                         name: Some(ident),
-                        args: args
+                        args: func_args
                             .iter()
                             .map(|&arg| hir::Pat::new(hir::PatKind::Var(arg), arg.span, arg.typ))
                             .collect(),
                         body: Box::new(hir::Expr::new(
-                            hir::ExprKind::ExternalCall(ext_var, args),
+                            hir::ExprKind::ExternalCall(ext_var, func_args),
                             ident.span,
                             None,
                         )),
@@ -732,10 +717,13 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 // FIXME
                 Ty::type_var(self.ctxt, TypeVar::new(id.ident))
             }
-            Type::Arrow(arg, ret) => {
-                let arg = self.lower_type_unscoped(arg)?;
+            Type::Arrow(args, ret) => {
+                let mut new_args = Vec::with_capacity(args.len());
+                for arg in args.iter() {
+                    new_args.push(self.lower_type_unscoped(arg)?);
+                }
                 let ret = self.lower_type_unscoped(ret)?;
-                Ty::arrow(self.ctxt, arg, ret)
+                Ty::arrow(self.ctxt, new_args, ret)
             }
             Type::Tuple(ts) => {
                 let mut elems = Vec::with_capacity(ts.len());

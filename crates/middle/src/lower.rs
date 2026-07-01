@@ -212,8 +212,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
                     TyKind::Skolem(skolem) => {
                         unreachable!("skolem variable {skolem} escaped inference")
                     }
-                    TyKind::Arrow(arg_typ, ret_typ) => {
-                        mir::Type::Arrow(vec![self.lower(arg_typ)], Box::new(self.lower(ret_typ)))
+                    TyKind::Arrow(arg_typs, ret_typ) => {
+                        let arg_typs: Vec<_> = arg_typs
+                            .iter()
+                            .map(|&arg_typ| self.lower(arg_typ))
+                            .collect();
+                        mir::Type::Arrow(arg_typs, Box::new(self.lower(ret_typ)))
                     }
                     TyKind::Tuple(elem_typs) => mir::Type::Tuple(
                         elem_typs

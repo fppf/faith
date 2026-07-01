@@ -99,7 +99,7 @@ pub enum Type<'ast> {
     /// 'a, 'b, ...
     Var(Id),
     /// t1 -> t2
-    Arrow(&'ast Sp<Type<'ast>>, &'ast Sp<Type<'ast>>),
+    Arrow(&'ast [Sp<Type<'ast>>], &'ast Sp<Type<'ast>>),
     /// (t1, ..., tn)
     Tuple(&'ast [Sp<Type<'ast>>]),
     /// \[t\]

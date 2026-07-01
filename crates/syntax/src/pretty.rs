@@ -78,8 +78,11 @@ impl Type<'_> {
         let doc = match self {
             Type::Base(base) => arena.text(base.to_string()),
             Type::Var(id) => arena.text(id.to_string()),
-            Type::Arrow(from, to) => from
-                .to_doc(arena, Parens::Inner)
+            Type::Arrow(args, to) => arena
+                .intersperse(
+                    args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
+                    arena.text(", "),
+                )
                 .append(" -> ")
                 .append(to.to_doc(arena, Parens::Inner))
                 .group(),

@@ -2,7 +2,7 @@ use span::Span;
 
 use crate::{
     Infer,
-    error::{InferError, TypeUnifyError, TypeUnifyErrorKind},
+    error::{ArityKind, InferError, TypeUnifyError, TypeUnifyErrorKind},
     ty::{Ty, TyKind},
 };
 
@@ -50,15 +50,17 @@ impl<'t> Unifier<'_, 't> {
             }),
             (None, None) => match (*lhs.kind(), *rhs.kind()) {
                 (lhs, rhs) if lhs == rhs => Ok(()),
-                (TyKind::Arrow(l_arg, l_ret), TyKind::Arrow(r_arg, r_ret)) => {
-                    self.unify(l_arg, r_arg)?;
+                (TyKind::Arrow(l_args, l_ret), TyKind::Arrow(r_args, r_ret)) => {
+                    self.zip_unify(ArityKind::Func, l_args, r_args)?;
                     self.unify(l_ret, r_ret)
                 }
                 (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
                     self.unify(l_h, r_h)?;
-                    self.zip_unify(l_args, r_args)
+                    self.zip_unify(ArityKind::Cons, l_args, r_args)
                 }
-                (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => self.zip_unify(l_ts, r_ts),
+                (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => {
+                    self.zip_unify(ArityKind::Tuple, l_ts, r_ts)
+                }
                 (TyKind::Vector(l), TyKind::Vector(r)) => self.unify(l, r),
                 (_, _) => Err(TypeUnifyError::new(
                     TypeUnifyErrorKind::Mismatch(lhs, rhs),
@@ -68,10 +70,15 @@ impl<'t> Unifier<'_, 't> {
         }
     }
 
-    fn zip_unify(&mut self, lhs: &[Ty<'t>], rhs: &[Ty<'t>]) -> Result<(), TypeUnifyError<'t>> {
+    fn zip_unify(
+        &mut self,
+        kind: ArityKind,
+        lhs: &[Ty<'t>],
+        rhs: &[Ty<'t>],
+    ) -> Result<(), TypeUnifyError<'t>> {
         if lhs.len() != rhs.len() {
             return Err(TypeUnifyError::new(
-                TypeUnifyErrorKind::Length(lhs.len(), rhs.len()),
+                TypeUnifyErrorKind::Arity(kind, lhs.len(), rhs.len()),
                 self.origin,
             ));
         }

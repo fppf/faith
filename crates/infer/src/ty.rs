@@ -105,8 +105,8 @@ pub enum TyKind<'t> {
     /// Type with arguments.
     App(Ty<'t>, &'t [Ty<'t>]),
 
-    /// Arrow type `a -> b`.
-    Arrow(Ty<'t>, Ty<'t>),
+    /// Arrow type `t1, t2, .., tn -> tr`.
+    Arrow(&'t [Ty<'t>], Ty<'t>),
     /// Product of types.
     Tuple(&'t [Ty<'t>]),
     /// Homogeneous vector.
@@ -260,9 +260,9 @@ impl<'t> Ty<'t> {
             | TyKind::Uni(_)
             | TyKind::Skolem(_) => (),
             TyKind::Vector(t) => v.visit(t),
-            TyKind::Arrow(t1, t2) => {
-                v.visit(t1);
-                v.visit(t2);
+            TyKind::Arrow(args, ret) => {
+                args.iter().for_each(|&arg| v.visit(arg));
+                v.visit(ret);
             }
             TyKind::App(t, ts) => {
                 v.visit(t);
@@ -289,7 +289,12 @@ impl<'t> Ty<'t> {
                     .alloc_from_iter(ts.iter().map(|&t| f.fold(t))),
             ),
             TyKind::Vector(t) => TyKind::Vector(f.fold(t)),
-            TyKind::Arrow(t1, t2) => TyKind::Arrow(f.fold(t1), f.fold(t2)),
+            TyKind::Arrow(args, ret) => TyKind::Arrow(
+                f.ctxt()
+                    .arena
+                    .alloc_from_iter(args.iter().map(|&arg| f.fold(arg))),
+                f.fold(ret),
+            ),
             TyKind::Tuple(ts) => TyKind::Tuple(
                 f.ctxt()
                     .arena
@@ -317,8 +322,21 @@ impl<'t> Ty<'t> {
         Ty::new(ctxt, TyKind::App(head, ctxt.arena.alloc_from_iter(args)))
     }
 
-    pub fn arrow(ctxt: &'t TyCtxt<'t>, source: Self, target: Self) -> Self {
-        Ty::new(ctxt, TyKind::Arrow(source, target))
+    pub fn arrow<I>(ctxt: &'t TyCtxt<'t>, sources: I, target: Self) -> Self
+    where
+        I: IntoIterator<Item = Self>,
+    {
+        Ty::new(
+            ctxt,
+            TyKind::Arrow(ctxt.arena.alloc_from_iter(sources), target),
+        )
+    }
+
+    pub fn single_arrow(ctxt: &'t TyCtxt<'t>, source: Self, target: Self) -> Self {
+        Ty::new(
+            ctxt,
+            TyKind::Arrow(ctxt.arena.alloc_from_iter(vec![source]), target),
+        )
     }
 
     pub fn n_arrow<I>(ctxt: &'t TyCtxt<'t>, sources: I, target: Self) -> Self
@@ -329,7 +347,7 @@ impl<'t> Ty<'t> {
         sources
             .into_iter()
             .rev()
-            .fold(target, |acc, source| Ty::arrow(ctxt, source, acc))
+            .fold(target, |acc, source| Ty::single_arrow(ctxt, source, acc))
     }
 
     pub fn type_var(ctxt: &'t TyCtxt<'t>, var: TypeVar) -> Self {
@@ -416,7 +434,7 @@ impl fmt::Display for Ty<'_> {
             TyKind::Var(v) => v.fmt(f),
             TyKind::Skolem(s) => s.fmt(f),
             TyKind::App(t, ts) => write!(f, "({t} {})", ts.iter().format(" ")),
-            TyKind::Arrow(t1, t2) => write!(f, "({t1} -> {t2})"),
+            TyKind::Arrow(args, ret) => write!(f, "({} -> {ret})", args.iter().format(", ")),
             TyKind::Tuple(ts) => write!(f, "({})", ts.iter().format(", ")),
             TyKind::Vector(t) => write!(f, "[{t}]"),
         }

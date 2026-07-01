@@ -2,7 +2,7 @@
 // mod hoist;
 mod lower;
 mod pretty;
-// mod shrink;
+mod shrink;
 
 pub mod mir;
 
@@ -36,8 +36,8 @@ pub fn lower_and_transform<'t>(
     let mut mir = lower::lower(ctxt, hir);
     log_mir("LOWER", &mir);
 
-    // shrink::shrink(&mut mir);
-    // log_mir("SHRINK", &mir);
+    shrink::shrink(&mut mir);
+    log_mir("SHRINK", &mir);
 
     // closure_convert::convert(&mut mir);
     // log_mir("CLOSURE", &mir);

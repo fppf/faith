@@ -40,10 +40,7 @@ impl<'a> Shrinker<'a> {
                     self.shrink_expr(expr);
                 }
             }
-            ExprKind::Tail(_)
-            | ExprKind::ExternalCall(..)
-            | ExprKind::Jump(..)
-            | ExprKind::Return(_) => (),
+            ExprKind::Call(_) | ExprKind::Jump(..) | ExprKind::Return(_) => (),
         }
 
         let modified = match &expr.kind {
@@ -65,7 +62,7 @@ impl<'a> Shrinker<'a> {
 
     fn try_replace(&mut self, var: Var, enclosing: ExprId, enclosed: ExprId) -> bool {
         if !free_vars(self.ctxt, enclosed).contains(&var) {
-            self.ctxt.exprs[enclosing] = self.ctxt.exprs.remove(enclosed).unwrap();
+            self.ctxt.exprs.swap(enclosing, enclosed);
             true
         } else {
             false

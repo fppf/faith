@@ -786,15 +786,25 @@ fn type_row<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
 
 fn type_<'ast>(p: &mut Parser<'ast>) -> ParseResult<Sp<Type<'ast>>> {
     let m = p.start();
-    let from = type_app(p)?;
-    if p.eat(ARROW) {
-        let to = type_(p)?;
+
+    let first_arg = type_app(p)?;
+    let mut args = vec![first_arg];
+
+    // Parse an n-ary type arrow
+    //   t1, t2, ..., tn -> tr
+    if p.at(COMMA) {
+        while !p.at(EOF) && p.eat(COMMA) {
+            args.push(type_app(p)?);
+        }
+
+        p.expect(ARROW)?;
+        let ret = type_(p)?;
         Ok(Sp::new(
-            Type::Arrow(alloc!(p, from), alloc!(p, to)),
+            Type::Arrow(alloc_iter!(p, args), alloc!(p, ret)),
             p.end(m),
         ))
     } else {
-        Ok(from)
+        Ok(first_arg)
     }
 }
 

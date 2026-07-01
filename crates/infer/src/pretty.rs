@@ -67,10 +67,13 @@ impl Ty<'_> {
             TyKind::Uni(uni) => arena.text(uni.to_string()),
             TyKind::Skolem(skolem) => arena.text(skolem.to_string()),
             TyKind::User(ident, _res) => arena.text(ident.to_string()),
-            TyKind::Arrow(from, to) => from
-                .to_doc(arena, Parens::Inner)
+            TyKind::Arrow(args, ret) => arena
+                .intersperse(
+                    args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
+                    arena.text(", "),
+                )
                 .append(" -> ")
-                .append(to.to_doc(arena, Parens::Inner))
+                .append(ret.to_doc(arena, Parens::Inner))
                 .group(),
             TyKind::Tuple(typs) => arena
                 .intersperse(typs.iter().map(|typ| typ.to_doc(arena, Parens::Top)), ", ")

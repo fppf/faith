@@ -324,7 +324,7 @@ impl<'t> Infer<'t> {
                 let ret_ty = self.fresh_var();
                 self.eq(
                     Origin::Generic(head_span, Span::dummy()),
-                    Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                    Ty::arrow(self.ctxt, arg_tys, ret_ty),
                     head_ty,
                 )?;
                 ret_ty
@@ -338,7 +338,7 @@ impl<'t> Infer<'t> {
                 let ret_ty = self.fresh_var();
                 self.eq(
                     Origin::Generic(ext_var.span, Span::dummy()),
-                    Ty::n_arrow(self.ctxt, arg_typs, ret_ty),
+                    Ty::arrow(self.ctxt, arg_typs, ret_ty),
                     ext_var.typ.expect("external without type"),
                 )?;
                 ret_ty
@@ -361,7 +361,7 @@ impl<'t> Infer<'t> {
                 let ret_ty = self.fresh_var();
                 self.eq(
                     Origin::Generic(cons_var.span, Span::dummy()),
-                    Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                    Ty::arrow(self.ctxt, arg_tys, ret_ty),
                     cons_typ,
                 )?;
                 ret_ty
@@ -370,7 +370,7 @@ impl<'t> Infer<'t> {
             ExprKind::Lambda(lambda) => {
                 let arg_tys = self.infer_pats(lambda.args.as_mut())?;
                 let body_ty = self.infer_expr(lambda.body.as_mut())?;
-                Ty::n_arrow(self.ctxt, arg_tys, body_ty)
+                Ty::arrow(self.ctxt, arg_tys, body_ty)
             }
             ExprKind::Let(pat, bind, body) => {
                 let pat_span = pat.span;
@@ -485,7 +485,7 @@ impl<'t> Infer<'t> {
                     let ret_ty = self.fresh_var();
                     self.eq(
                         Origin::Generic(cons_var.span, Span::dummy()),
-                        Ty::n_arrow(self.ctxt, arg_tys, ret_ty),
+                        Ty::arrow(self.ctxt, arg_tys, ret_ty),
                         cons_typ,
                     )?;
                     ret_ty
