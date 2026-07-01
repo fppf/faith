@@ -5,7 +5,7 @@ use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
 use slotmap::Key;
 
 use crate::mir::{
-    CallId, ExprId, ExprKind, FuncId, Generic, JoinId, Lit, MirCtxt, Pat, PrimType, Program, Rhs,
+    Call, CallKind, ExprId, ExprKind, FuncId, JoinId, Lit, MirCtxt, Pat, PrimType, Program, Rhs,
     Type, Value, Var,
 };
 
@@ -97,15 +97,7 @@ impl ExprId {
                 .append("in")
                 .append(arena.line())
                 .append(body.to_doc(ctxt, arena)),
-            ExprKind::Tail(call) => call.to_doc(ctxt, arena),
-            ExprKind::ExternalCall(ext, args) => ext
-                .into_doc(arena)
-                .append(
-                    arena
-                        .intersperse(args.iter().map(|arg| arg.into_doc(arena)), arena.space())
-                        .enclose("$(", ")"),
-                )
-                .group(),
+            ExprKind::Call(call) => call.to_doc(ctxt, arena),
             ExprKind::Jump(join_id, vs) => join_id
                 .into_doc(arena)
                 .space(arena.intersperse(vs.iter().copied(), arena.space()))
@@ -236,16 +228,20 @@ impl JoinId {
     }
 }
 
-impl CallId {
-    pub fn to_doc<'a>(self, ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
-        let call = &ctxt.calls[self];
-        call.func_var
+impl Call {
+    pub fn to_doc<'a>(&self, _ctxt: &MirCtxt, arena: &'a DocArena<'a>) -> DocBuilder<'a> {
+        let doc = self
+            .func_var
             .into_doc(arena)
             .space(arena.intersperse(
-                call.args.iter().map(|arg| arg.into_doc(arena)),
+                self.args.iter().map(|arg| arg.into_doc(arena)),
                 arena.space(),
             ))
-            .group()
+            .group();
+        match self.kind {
+            CallKind::Normal => doc,
+            CallKind::External => doc.enclose("$(", ")"),
+        }
     }
 }
 

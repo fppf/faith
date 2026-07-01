@@ -5,7 +5,7 @@ use infer::{
 };
 use span::{Ident, Span, Sym};
 
-use crate::mir::{self, ExprId, JoinId, MirCtxt, Value, Var};
+use crate::mir::{self, Call, CallKind, ExprId, JoinId, MirCtxt, Value, Var};
 
 pub(crate) fn lower<'t>(ctxt: &'t TyCtxt<'t>, program: &hir::Program<'t>) -> mir::Program {
     LoweringContext::new(ctxt, program).lower()
@@ -318,9 +318,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
             ),
             ExprKind::ExternalCall(ext_var, args) => {
                 let ext_var = self.create_var(*ext_var);
-                let args: Vec<_> = args.iter().map(|&var| self.get_var(var)).collect();
-                self.mir_ctxt
-                    .new_expr(mir::ExprKind::ExternalCall(ext_var, args))
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|&var| Value::Var(self.get_var(var)))
+                    .collect();
+                let call = Call::new(CallKind::External, ext_var, args);
+                self.mir_ctxt.new_expr(mir::ExprKind::Call(call))
             }
             ExprKind::Cons(cons, args) => self.lower_var_ctx(
                 *cons,
@@ -422,10 +425,8 @@ impl<'a, 't> LoweringContext<'a, 't> {
                                 Value::Lit(_) => panic!("literal in function position"),
                                 Value::Ptr(_) => unreachable!(),
                             };
-                            mir::Rhs::Call(self.mir_ctxt.new_call(mir::Call {
-                                func_var,
-                                args: args.into(),
-                            }))
+                            let call = Call::new(CallKind::Normal, func_var, args.into());
+                            mir::Rhs::Call(call)
                         }
                         ListKind::Cons => {
                             let (cons, args) = values.split_first().unwrap();

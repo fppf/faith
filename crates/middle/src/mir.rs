@@ -55,7 +55,6 @@ new_key_type! { pub struct TypeId; }
 new_key_type! { pub struct FuncId; }
 new_key_type! { pub struct JoinId; }
 new_key_type! { pub struct ExprId; }
-new_key_type! { pub struct CallId; }
 
 #[derive(Default, Debug)]
 pub struct MirCtxt {
@@ -63,7 +62,6 @@ pub struct MirCtxt {
     pub funcs: SlotMap<FuncId, Func>,
     pub joins: SlotMap<JoinId, Join>,
     pub exprs: SlotMap<ExprId, Expr>,
-    pub calls: SlotMap<CallId, Call>,
     var_counter: Cell<u32>,
     generic_counter: Cell<u32>,
 }
@@ -83,10 +81,6 @@ impl MirCtxt {
 
     pub fn new_expr(&mut self, kind: ExprKind) -> ExprId {
         self.exprs.insert(Expr::new(kind))
-    }
-
-    pub fn new_call(&mut self, call: Call) -> CallId {
-        self.calls.insert(call)
     }
 
     pub fn new_var(&self, sym: Sym) -> Var {
@@ -138,9 +132,7 @@ pub enum ExprKind {
     // let join in body
     LetJoin { join_id: JoinId, body: ExprId },
     // tail call
-    Tail(CallId),
-    // external tail calls
-    ExternalCall(Var, Vec<Var>),
+    Call(Call),
     // jump(id, v1, ..., vn)
     Jump(JoinId, Vec<Value>),
     // return(v)
@@ -181,7 +173,7 @@ impl FreeVars {
         match &expr.kind {
             ExprKind::Let { lhs, rhs, body } => {
                 self.bind_var(*lhs);
-                self.rhs_vars(ctxt, rhs);
+                self.rhs_vars(rhs);
                 self.expr_vars(ctxt, *body);
             }
             ExprKind::LetFunc {
@@ -195,12 +187,7 @@ impl FreeVars {
                 self.join_vars(ctxt, *join_id);
                 self.expr_vars(ctxt, *body);
             }
-            ExprKind::Tail(call) => self.call_vars(ctxt, *call),
-            ExprKind::ExternalCall(_, args) => {
-                for var in args {
-                    self.add_var(*var);
-                }
-            }
+            ExprKind::Call(call) => self.call_vars(call),
             ExprKind::Jump(_, vals) => {
                 for val in vals {
                     self.value_vars(val);
@@ -216,8 +203,7 @@ impl FreeVars {
         }
     }
 
-    fn call_vars(&mut self, ctxt: &MirCtxt, call_id: CallId) {
-        let call = &ctxt.calls[call_id];
+    fn call_vars(&mut self, call: &Call) {
         self.add_var(call.func_var);
         for val in &call.args {
             self.value_vars(val);
@@ -232,7 +218,7 @@ impl FreeVars {
         }
     }
 
-    fn rhs_vars(&mut self, ctxt: &MirCtxt, rhs: &Rhs) {
+    fn rhs_vars(&mut self, rhs: &Rhs) {
         match rhs {
             Rhs::Value(val) => self.value_vars(val),
             Rhs::Proj(v, _) => self.add_var(*v),
@@ -247,7 +233,7 @@ impl FreeVars {
                     self.value_vars(val);
                 }
             }
-            Rhs::Call(call) => self.call_vars(ctxt, *call),
+            Rhs::Call(call) => self.call_vars(call),
         }
     }
 
@@ -276,13 +262,30 @@ pub enum Rhs {
     Cons(Var, Vec<Value>),
     Tuple(Vec<Value>),
     Vector(Vec<Value>),
-    Call(CallId),
+    Call(Call),
 }
 
 #[derive(Clone, Debug)]
 pub struct Call {
+    pub kind: CallKind,
     pub func_var: Var,
     pub args: Vec<Value>,
+}
+
+impl Call {
+    pub fn new(kind: CallKind, func_var: Var, args: Vec<Value>) -> Self {
+        Self {
+            kind,
+            func_var,
+            args,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CallKind {
+    Normal,
+    External,
 }
 
 #[derive(Clone, Debug)]
