@@ -134,25 +134,19 @@ impl<T> TypedArena<T> {
     /// Allocates an object in the `TypedArena`, returning a reference to it.
     #[inline]
     pub fn alloc(&self, object: T) -> &mut T {
+        assert!(size_of::<T>() != 0);
+
         if self.ptr == self.end {
             self.grow(1)
         }
 
         unsafe {
-            if size_of::<T>() == 0 {
-                self.ptr.set(self.ptr.get().wrapping_byte_add(1));
-                let ptr = ptr::NonNull::<T>::dangling().as_ptr();
-                // Don't drop the object. This `write` is equivalent to `forget`.
-                ptr::write(ptr, object);
-                &mut *ptr
-            } else {
-                let ptr = self.ptr.get();
-                // Advance the pointer.
-                self.ptr.set(self.ptr.get().add(1));
-                // Write into uninitialized memory.
-                ptr::write(ptr, object);
-                &mut *ptr
-            }
+            let ptr = self.ptr.get();
+            // Advance the pointer.
+            self.ptr.set(self.ptr.get().add(1));
+            // Write into uninitialized memory.
+            ptr::write(ptr, object);
+            &mut *ptr
         }
     }
 
@@ -165,8 +159,19 @@ impl<T> TypedArena<T> {
         available_bytes >= additional_bytes
     }
 
+    /// Allocates storage for `len >= 1` values in this arena, and returns a
+    /// raw pointer to the first value's storage.
+    ///
+    /// # Safety
+    ///
+    /// Caller must initialize each of the `len` slots to a droppable value
+    /// before the arena is dropped.
+    ///
+    /// In practice, this typically means that the caller must be able to
+    /// raw-copy `len` already-initialized values into the slice without any
+    /// possibility of panicking.
     #[inline]
-    fn alloc_raw_slice(&self, len: usize) -> *mut T {
+    unsafe fn alloc_raw_slice(&self, len: usize) -> *mut T {
         assert!(size_of::<T>() != 0);
         assert!(len != 0);
 
@@ -189,7 +194,7 @@ impl<T> TypedArena<T> {
     /// storing the elements in the arena.
     #[inline]
     pub fn alloc_from_iter<I: IntoIterator<Item = T>>(&self, iter: I) -> &mut [T] {
-        // Despite the similarlty with `DroplessArena`, we cannot reuse their fast case. The reason
+        // Despite the similarity with `DroplessArena`, we cannot reuse their fast case. The reason
         // is subtle: these arenas are reentrant. In other words, `iter` may very well be holding a
         // reference to `self` and adding elements to the arena during iteration.
         //
@@ -209,9 +214,15 @@ impl<T> TypedArena<T> {
         }
         // Move the content to the arena by copying and then forgetting it.
         let len = vec.len();
-        let start_ptr = self.alloc_raw_slice(len);
+
+        // SAFETY: After allocating raw storage for exactly `len` values, we
+        // must fully initialize the storage without panicking, and we must
+        // also prevent the stale values in the vec from being dropped.
         unsafe {
+            let start_ptr = self.alloc_raw_slice(len);
+            // Initialize the newly-allocated storage without panicking.
             vec.as_ptr().copy_to_nonoverlapping(start_ptr, len);
+            // Prevent the stale values in the vec from being dropped.
             vec.set_len(0);
             slice::from_raw_parts_mut(start_ptr, len)
         }
@@ -248,10 +259,9 @@ impl<T> TypedArena<T> {
             // Also ensure that this chunk can fit `additional`.
             new_cap = cmp::max(additional, new_cap);
 
-            let mut chunk = ArenaChunk::<T>::new(new_cap);
+            let chunk = chunks.push_mut(ArenaChunk::<T>::new(new_cap));
             self.ptr.set(chunk.start());
             self.end.set(chunk.end());
-            chunks.push(chunk);
         }
     }
 
@@ -264,16 +274,10 @@ impl<T> TypedArena<T> {
         let end = self.ptr.get().addr();
         // We then calculate the number of elements to be dropped in the last chunk,
         // which is the filled area's length.
-        let diff = if size_of::<T>() == 0 {
-            // `T` is ZST. It can't have a drop flag, so the value here doesn't matter. We get
-            // the number of zero-sized values in the last and only chunk, just out of caution.
-            // Recall that `end` was incremented for each allocated value.
-            end - start
-        } else {
-            // FIXME: this should *likely* use `offset_from`, but more
-            // investigation is needed (including running tests in miri).
-            (end - start) / size_of::<T>()
-        };
+        assert!(size_of::<T>() != 0);
+        // FIXME: this should *likely* use `offset_from`, but more
+        // investigation is needed (including running tests in miri).
+        let diff = (end - start) / size_of::<T>();
         // Pass that to the `destroy` method.
         unsafe {
             last_chunk.destroy(diff);
@@ -380,7 +384,7 @@ impl DroplessArena {
             // Also ensure that this chunk can fit `additional`.
             new_cap = cmp::max(additional, new_cap);
 
-            let mut chunk = ArenaChunk::new(align_up(new_cap, PAGE));
+            let chunk = chunks.push_mut(ArenaChunk::new(align_up(new_cap, PAGE)));
             self.start.set(chunk.start());
 
             // Align the end to DROPLESS_ALIGNMENT.
@@ -391,7 +395,6 @@ impl DroplessArena {
             debug_assert!(chunk.start().addr() <= end);
 
             self.end.set(chunk.end().with_addr(end));
-            chunks.push(chunk);
         }
     }
 
@@ -465,19 +468,6 @@ impl DroplessArena {
             mem.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
             slice::from_raw_parts_mut(mem, slice.len())
         }
-    }
-
-    /// Used by `Lift` to check whether this slice is allocated
-    /// in this arena.
-    #[inline]
-    pub fn contains_slice<T>(&self, slice: &[T]) -> bool {
-        for chunk in self.chunks.borrow_mut().iter_mut() {
-            let ptr = slice.as_ptr().cast::<u8>().cast_mut();
-            if chunk.start() <= ptr && chunk.end() >= ptr {
-                return true;
-            }
-        }
-        false
     }
 
     /// Allocates a string slice that is copied into the `DroplessArena`, returning a
