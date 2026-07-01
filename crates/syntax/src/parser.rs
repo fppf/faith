@@ -95,6 +95,17 @@ impl<'ast> Parser<'ast> {
         }
     }
 
+    #[inline]
+    pub fn at_eof(&self) -> bool {
+        self.at(TokenKind::EOF)
+    }
+
+    pub fn eat_newlines(&mut self) {
+        while self.eat(TokenKind::NEWLINE) {
+            //
+        }
+    }
+
     pub fn bump(&mut self, kind: TokenKind) {
         assert!(self.eat(kind));
     }
