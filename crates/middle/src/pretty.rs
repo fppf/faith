@@ -2,8 +2,6 @@ use std::fmt;
 
 use base::pp::{DocArena, DocBuilder, IntoDoc, Subscript};
 
-use slotmap::Key;
-
 use crate::mir::{
     Call, CallKind, ExprId, ExprKind, FuncId, JoinId, Lit, MirCtxt, Pat, PrimType, Program, Rhs,
     Type, Value, Var,
@@ -18,10 +16,7 @@ impl fmt::Display for Var {
 
 impl fmt::Display for JoinId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ffi = self.data().as_ffi();
-        let idx = ffi & 0xffff_ffff;
-        let version = (ffi >> 32) | 1;
-        write!(f, ".j{idx}_{version}")
+        write!(f, ".j{}", self.index())
     }
 }
 

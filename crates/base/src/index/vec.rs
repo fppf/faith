@@ -116,6 +116,16 @@ impl<I: Idx, T> IndexVec<I, T> {
     }
 
     #[inline]
+    pub fn push_with_index<F>(&mut self, f: F) -> I
+    where
+        F: FnOnce(I) -> T,
+    {
+        let idx = self.next_index();
+        self.raw.push(f(idx));
+        idx
+    }
+
+    #[inline]
     pub fn pop(&mut self) -> Option<T> {
         self.raw.pop()
     }

@@ -9,5 +9,3 @@ base = { path = "../base" }
 span = { path = "../span" }
 log = { path = "../log" }
 infer = { path = "../infer" }
-
-slotmap = "1.1"

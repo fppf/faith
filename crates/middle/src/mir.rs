@@ -1,7 +1,9 @@
 use std::{cell::Cell, fmt};
 
-use base::hash::{IndexSet, Set};
-use slotmap::{KeyData, SlotMap, new_key_type};
+use base::{
+    hash::{IndexSet, Set},
+    index::IndexVec,
+};
 use span::Sym;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -51,36 +53,38 @@ pub enum PrimType {
     Str,
 }
 
-new_key_type! { pub struct TypeId; }
-new_key_type! { pub struct FuncId; }
-new_key_type! { pub struct JoinId; }
-new_key_type! { pub struct ExprId; }
+base::newtype_index! {
+    pub struct FuncId {}
+}
+
+base::newtype_index! {
+    pub struct JoinId {}
+}
+
+base::newtype_index! {
+    pub struct ExprId {}
+}
 
 #[derive(Default, Debug)]
 pub struct MirCtxt {
-    pub typs: SlotMap<TypeId, Type>,
-    pub funcs: SlotMap<FuncId, Func>,
-    pub joins: SlotMap<JoinId, Join>,
-    pub exprs: SlotMap<ExprId, Expr>,
+    pub funcs: IndexVec<FuncId, Func>,
+    pub joins: IndexVec<JoinId, Join>,
+    pub exprs: IndexVec<ExprId, Expr>,
     var_counter: Cell<u32>,
     generic_counter: Cell<u32>,
 }
 
 impl MirCtxt {
-    pub fn new_type(&mut self, typ: Type) -> TypeId {
-        self.typs.insert(typ)
-    }
-
     pub fn new_func(&mut self, func: Func) -> FuncId {
-        self.funcs.insert(func)
+        self.funcs.push(func)
     }
 
     pub fn new_join(&mut self, args: Vec<Var>, body: ExprId) -> JoinId {
-        self.joins.insert_with_key(|id| Join { id, args, body })
+        self.joins.push_with_index(|id| Join { id, args, body })
     }
 
     pub fn new_expr(&mut self, kind: ExprKind) -> ExprId {
-        self.exprs.insert(Expr::new(kind))
+        self.exprs.push(Expr::new(kind))
     }
 
     pub fn new_var(&self, sym: Sym) -> Var {
@@ -309,18 +313,6 @@ pub struct Func {
     pub body: ExprId,
     pub recursive: bool,
     pub typ: Type,
-}
-
-impl Func {
-    pub(crate) fn sentinel() -> Self {
-        Self {
-            name: Var::new(Sym::intern("~"), 0),
-            args: Vec::new(),
-            body: ExprId(KeyData::default()),
-            recursive: false,
-            typ: Type::Prim(PrimType::Unit),
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
