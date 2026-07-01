@@ -274,6 +274,10 @@ impl<'t> HirVisitor<'t> for MatchCompiler<'t> {
                     tree,
                 };
                 compiled.replace(result);
+
+                for (_, expr) in arms {
+                    self.visit_expr(expr);
+                }
             }
             _ => expr.visit_with(self),
         }
