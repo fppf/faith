@@ -52,10 +52,9 @@ impl Ty<'_> {
             | TyKind::Var(_)
             | TyKind::Uni(_)
             | TyKind::Skolem(_)
-            | TyKind::User(..)
             | TyKind::Tuple(_)
             | TyKind::Vector(_) => false,
-            TyKind::App(_, args) => !args.is_empty(),
+            TyKind::App(_, _, args) => !args.is_empty(),
             TyKind::Arrow(..) => true,
         }
     }
@@ -66,7 +65,6 @@ impl Ty<'_> {
             TyKind::Var(id) => arena.text(id.to_string()),
             TyKind::Uni(uni) => arena.text(uni.to_string()),
             TyKind::Skolem(skolem) => arena.text(skolem.to_string()),
-            TyKind::User(ident, _res) => arena.text(ident.to_string()),
             TyKind::Arrow(args, ret) => arena
                 .intersperse(
                     args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
@@ -80,12 +78,12 @@ impl Ty<'_> {
                 .group()
                 .parens(),
             TyKind::Vector(typ) => typ.to_doc(arena, Parens::Top).brackets(),
-            TyKind::App(path, args) => {
+            TyKind::App(_, id, args) => {
                 if args.is_empty() {
-                    arena.text(path.to_string())
+                    arena.text(id.to_string())
                 } else {
                     arena
-                        .text(path.to_string())
+                        .text(id.to_string())
                         .space(arena.intersperse(
                             args.iter().map(|arg| arg.to_doc(arena, Parens::Inner)),
                             " ",

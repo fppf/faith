@@ -361,7 +361,11 @@ impl<'t> Infer<'t> {
                 let ret_ty = self.fresh_var();
                 self.eq(
                     Origin::Generic(cons_var.span, Span::dummy()),
-                    Ty::arrow(self.ctxt, arg_tys, ret_ty),
+                    if arg_tys.len() > 0 {
+                        Ty::arrow(self.ctxt, arg_tys, ret_ty)
+                    } else {
+                        ret_ty
+                    },
                     cons_typ,
                 )?;
                 ret_ty

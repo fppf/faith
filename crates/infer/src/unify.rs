@@ -54,8 +54,9 @@ impl<'t> Unifier<'_, 't> {
                     self.zip_unify(ArityKind::Func, l_args, r_args)?;
                     self.unify(l_ret, r_ret)
                 }
-                (TyKind::App(l_h, l_args), TyKind::App(r_h, r_args)) => {
-                    self.unify(l_h, r_h)?;
+                (TyKind::App(l_res, _, l_args), TyKind::App(r_res, _, r_args))
+                    if l_res == r_res =>
+                {
                     self.zip_unify(ArityKind::Cons, l_args, r_args)
                 }
                 (TyKind::Tuple(l_ts), TyKind::Tuple(r_ts)) => {

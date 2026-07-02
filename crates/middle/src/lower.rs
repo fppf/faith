@@ -18,6 +18,7 @@ struct LoweringContext<'a, 't> {
     mir_ctxt: MirCtxt,
     res_to_var: Map<Res, Var>,
     var_to_res: Map<Var, Res>,
+    types: Map<Res, Var>,
     temporaries: Map<Ident, Var>,
 }
 
@@ -67,6 +68,7 @@ impl<'a, 't> LoweringContext<'a, 't> {
             mir_ctxt: MirCtxt::default(),
             res_to_var: Map::default(),
             var_to_res: Map::default(),
+            types: Map::default(),
             temporaries: Map::default(),
         }
     }
@@ -184,12 +186,12 @@ impl<'a, 't> LoweringContext<'a, 't> {
 
     fn lower_typ(&mut self, typ: infer::ty::Ty<'t>) -> mir::Type {
         struct TypeLowerer<'c, 'a, 't> {
-            lower: &'c LoweringContext<'a, 't>,
+            lower: &'c mut LoweringContext<'a, 't>,
             generics: Map<TypeVar, mir::Generic>,
         }
 
         impl<'c, 'a, 't> TypeLowerer<'c, 'a, 't> {
-            fn new(lower: &'c LoweringContext<'a, 't>) -> Self {
+            fn new(lower: &'c mut LoweringContext<'a, 't>) -> Self {
                 Self {
                     lower,
                     generics: Map::default(),
@@ -226,7 +228,16 @@ impl<'a, 't> LoweringContext<'a, 't> {
                             .collect(),
                     ),
                     TyKind::Vector(elem_typ) => mir::Type::Vector(Box::new(self.lower(elem_typ))),
-                    TyKind::User(..) | TyKind::App(..) => todo!(),
+                    TyKind::App(res, id, args) => {
+                        // TODO
+                        let stamp = self.lower.types.len() as u32;
+                        let var = *self
+                            .lower
+                            .types
+                            .entry(res)
+                            .or_insert_with(|| Var::new(id.sym, stamp));
+                        mir::Type::App(var, args.iter().map(|&arg| self.lower(arg)).collect())
+                    }
                 }
             }
 

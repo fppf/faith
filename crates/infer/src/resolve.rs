@@ -30,7 +30,7 @@ pub fn resolve_program_in<'ast, 't>(
     ctxt: &'t TyCtxt<'t>,
     program: &'ast Program<'ast>,
 ) -> Result<hir::Program<'t>, Diagnostic> {
-    let graph = build_module_graph(program);
+    let _graph = build_module_graph(program);
 
     Resolver::new(ctxt, program)
         .resolve()
@@ -469,14 +469,12 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 log::trace!("[resolve_item] Item::Type");
                 // To permit recursive type decls, we must first register all
                 // decls within the decl list.
-                let mut decl_vars = Vec::with_capacity(decls.len());
+                let mut decl_reses = Vec::with_capacity(decls.len());
                 for decl in decls {
                     seen.update(Namespace::Type, decl.id.ident)?;
 
                     let decl_res = Res::Def(DefKind::Type, self.ctxt.new_res_id());
-                    let decl_typ = Ty::new(self.ctxt, TyKind::User(decl.id.ident, decl_res));
-                    let decl_var = self.make_var(decl.id, decl_res, Some(decl_typ));
-                    decl_vars.push(decl_var);
+                    decl_reses.push(decl_res);
 
                     self.current_module_mut()
                         .types
@@ -485,11 +483,10 @@ impl<'ast, 't> Resolver<'ast, 't> {
                     log::trace!("  {} => {decl_res}", decl.id);
                 }
 
-                for (decl, decl_var) in decls.iter().zip(decl_vars) {
+                for (decl, decl_res) in decls.iter().zip(decl_reses) {
                     match decl.kind {
-                        TypeDeclKind::Alias(ast_ty) => {
-                            let _ty = self.lower_type(ast_ty)?;
-                            todo!("fix alias implementation")
+                        TypeDeclKind::Alias(_) => {
+                            panic!("type aliases not supported");
                         }
                         TypeDeclKind::Variant(variants) => {
                             // A variant (ADT)
@@ -498,12 +495,13 @@ impl<'ast, 't> Resolver<'ast, 't> {
                             //      | C1 t11 t12 ..
                             //      ..
                             //      | Cn tn1 tn2 ..
-                            let adt_res = decl_var.res;
+                            let adt_res = decl_res;
 
                             // Construct (T 'a1 .. 'ak)
                             let adt_typ = Ty::app(
                                 self.ctxt,
-                                decl_var.typ.unwrap(),
+                                decl_res,
+                                decl.id.ident,
                                 decl.vars
                                     .iter()
                                     .map(|id| Ty::type_var(self.ctxt, TypeVar::new(id.ident))),
@@ -523,10 +521,13 @@ impl<'ast, 't> Resolver<'ast, 't> {
                                 }
 
                                 // Constructor (Ci ti1 .. tik) is given type
-                                // (ti1 -> .. -> tik -> (T 'a1 .. 'ak))
+                                // (ti1, .., tik -> (T 'a1 .. 'ak))
                                 let arity = new_args.len();
-                                let cons_typ =
-                                    Ty::n_arrow(self.ctxt, new_args.iter().copied(), adt_typ);
+                                let cons_typ = if arity > 0 {
+                                    Ty::arrow(self.ctxt, new_args.iter().copied(), adt_typ)
+                                } else {
+                                    adt_typ
+                                };
 
                                 let cons_var = self.make_var(id, cons_res, Some(cons_typ));
 
@@ -534,7 +535,6 @@ impl<'ast, 't> Resolver<'ast, 't> {
                                     var: cons_var,
                                     args: self.ctxt.arena.alloc_from_iter(new_args),
                                     index,
-                                    arity,
                                     adt: adt_res,
                                 };
                                 constructors.insert(cons_res, cons);
@@ -738,12 +738,11 @@ impl<'ast, 't> Resolver<'ast, 't> {
             }
             Type::App(head, ts) => {
                 let decl_var = self.resolve_path_inner(Namespace::Type, head)?;
-                let head = Ty::new(self.ctxt, TyKind::User(decl_var.id, decl_var.res));
                 let mut args = Vec::with_capacity(ts.len());
                 for t in ts.iter() {
                     args.push(self.lower_type_unscoped(t)?);
                 }
-                Ty::app(self.ctxt, head, args)
+                Ty::app(self.ctxt, decl_var.res, decl_var.id, args)
             }
             Type::Row(..) => todo!("implement record types"),
         };
@@ -802,14 +801,13 @@ impl<'ast, 't> Resolver<'ast, 't> {
                 let new_args = self.resolve_exprs(args)?;
 
                 let cons = self.ctxt.get_constructor(var.res).unwrap();
-                let arity = cons.arity;
-                if arity == new_args.len() {
+                if cons.args.len() == new_args.len() {
                     hir::ExprKind::Cons(var, new_args)
                 } else {
                     return Err(ResolveError::ConstructorArity(
                         var.id.sym,
                         expr.span,
-                        arity,
+                        cons.args.len(),
                         new_args.len(),
                     ));
                 }

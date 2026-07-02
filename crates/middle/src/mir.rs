@@ -13,7 +13,7 @@ pub struct Var {
 }
 
 impl Var {
-    fn new(sym: Sym, stamp: u32) -> Self {
+    pub(crate) fn new(sym: Sym, stamp: u32) -> Self {
         Self { sym, stamp }
     }
 }

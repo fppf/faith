@@ -348,18 +348,6 @@ impl<'t> MatchCompiler<'t> {
             .typ
             .expect("match compilation requires typed HIR");
 
-        if let Some(res) = branch_typ.as_user() {
-            let adt = self.ctxt.get_adt(res).unwrap();
-            let num_cons = adt.constructors.len();
-            let mut cases = Vec::with_capacity(num_cons);
-            for cons in adt.constructors.values() {
-                let vars = self.generate_typed_vars(cons.args);
-                // OK because adt.constructors is an index map
-                cases.push((Constructor::Variant(cons.var, cons.index), vars, Vec::new()));
-            }
-            return DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases));
-        }
-
         match branch_typ.kind() {
             TyKind::Base(BaseType::Unit) => {
                 let cases = vec![(Constructor::Unit, Vec::new(), Vec::new())];
@@ -382,12 +370,18 @@ impl<'t> MatchCompiler<'t> {
                 DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases))
             }
             TyKind::Vector(_) => todo!("add support for matching vectors"),
-            TyKind::User(..)
-            | TyKind::App(..)
-            | TyKind::Arrow(..)
-            | TyKind::Var(_)
-            | TyKind::Skolem(_)
-            | TyKind::Uni(_) => {
+            TyKind::App(res, _, _) => {
+                let adt = self.ctxt.get_adt(*res).unwrap();
+                let num_cons = adt.constructors.len();
+                let mut cases = Vec::with_capacity(num_cons);
+                for cons in adt.constructors.values() {
+                    let vars = self.generate_typed_vars(cons.args);
+                    // OK because adt.constructors is an index map
+                    cases.push((Constructor::Variant(cons.var, cons.index), vars, Vec::new()));
+                }
+                DecisionTree::Switch(branch_var, self.compile_cases(matrix, branch_var, cases))
+            }
+            TyKind::Arrow(..) | TyKind::Var(_) | TyKind::Skolem(_) | TyKind::Uni(_) => {
                 println!("{matrix:#?}");
                 unreachable!("tried to match on {branch_typ}")
             }

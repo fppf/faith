@@ -175,11 +175,14 @@ impl Type {
         match self {
             Type::Prim(prim_type) => arena.text(prim_type.to_string()),
             Type::Generic(generic) => arena.text(generic.to_string()),
-            Type::App(var, items) => todo!(),
+            Type::App(var, args) => var
+                .into_doc(arena)
+                .space(arena.intersperse(args.iter().map(|arg| arg.to_doc(arena)), arena.text(" ")))
+                .parens(),
             Type::Arrow(arg_typs, ret_typ) => arena
                 .intersperse(
                     arg_typs.iter().map(|typ| typ.to_doc(arena)),
-                    arena.text(", "),
+                    arena.text(" "),
                 )
                 .space("-> ")
                 .append(ret_typ.to_doc(arena))

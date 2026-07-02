@@ -862,9 +862,8 @@ fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
     p.expect(EQUAL)?;
     let kind = match p.current().kind {
         PIPE => {
-            p.bump(PIPE);
             let mut variants = Vec::new();
-            while !p.at_eof() && !p.at(PIPE) {
+            while !p.at_eof() && p.eat(PIPE) {
                 let ctor = ident_upper(p)?;
                 let mut args = Vec::new();
                 while at_type_atom(p) {
@@ -878,11 +877,7 @@ fn type_decl<'ast>(p: &mut Parser<'ast>) -> ParseResult<TypeDecl<'ast>> {
                     }
                 }
                 variants.push((Id::new(ctor, p.next_ast_id()), alloc_iter!(p, args)));
-                if !p.eat(COMMA) {
-                    break;
-                }
             }
-            p.expect(PIPE)?;
             TypeDeclKind::Variant(alloc_iter!(p, variants))
         }
         _ => {

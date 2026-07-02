@@ -1,27 +1,13 @@
--- traits, one day? :)
-
-mod io = {
-   external print : str -> () = "$print"
-   external println : str -> () = "$println"
-}
-
-mod i32 = {
-   external (+) : i32 -> i32 -> i32 = "$i32_add"
-   external (==) : i32 -> i32 -> bool = "$i32_eq"
-   external to_str : i32 -> str = "$i32_to_str"    
-}
-
-mod bool = {
-   external (==) : bool -> bool -> bool = "$bool_eq"
-   fn to_str b = case b {
-      true  => "true",
-      false => "false",
-   }
-}
-
-mod vec = import "vec.fe"
-mod list = import "list.fe"
-mod option = import "option.fe"
-mod either = import "either.fe"
-
 fn id x = x
+
+mod opt = {
+  type option 'a =
+     | Some 'a
+     | None
+
+  fn map f o =
+     case o {
+        Some x => Some (f x),
+        None => None
+     }
+}
