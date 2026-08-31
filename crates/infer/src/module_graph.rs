@@ -214,7 +214,7 @@ impl<'ast> AstVisitor<'ast> for ModuleGraphBuilder<'ast> {
                     self.name_stack.last().copied(),
                     ModuleKind::Unit(*source_id),
                 );
-                let comp_unit = self.program.imports[&source_id];
+                let comp_unit = self.program.imports[source_id];
                 self.with_module(unit_module, |self_| self_.visit_comp_unit(comp_unit))
             }
         }

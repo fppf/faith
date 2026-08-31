@@ -46,6 +46,7 @@ enum Parens {
 impl Ty<'_> {
     // If this type, as occuring inside another type,
     // might need to be wrapped in parentheses.
+    #[allow(unused)]
     fn needs_inner_parens(&self) -> bool {
         match self.kind() {
             TyKind::Base(_)
@@ -59,6 +60,8 @@ impl Ty<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
+    #[allow(unused)]
     fn to_doc<'a>(&self, arena: &'a DocArena<'a>, parens: Parens) -> DocBuilder<'a> {
         let doc = match self.kind() {
             TyKind::Base(base) => arena.text(base.to_string()),

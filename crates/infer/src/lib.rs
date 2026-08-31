@@ -1,5 +1,3 @@
-#![feature(never_type)]
-
 use std::fmt;
 
 use base::hash::Map;
@@ -32,7 +30,7 @@ pub fn infer_program_in<'ast, 't>(
 
     Infer::new(ctxt).infer(&mut hir).map_err(Diagnostic::from)?;
 
-    match_compile::compile(&ctxt, &mut hir)?;
+    match_compile::compile(ctxt, &mut hir)?;
 
     Ok(hir)
 }
@@ -361,7 +359,7 @@ impl<'t> Infer<'t> {
                 let ret_ty = self.fresh_var();
                 self.eq(
                     Origin::Generic(cons_var.span, Span::dummy()),
-                    if arg_tys.len() > 0 {
+                    if !arg_tys.is_empty() {
                         Ty::arrow(self.ctxt, arg_tys, ret_ty)
                     } else {
                         ret_ty

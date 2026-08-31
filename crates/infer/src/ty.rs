@@ -66,6 +66,12 @@ impl<'t> TyCtxt<'t> {
     }
 }
 
+impl<'t> Default for TyCtxt<'t> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Adt<'t> {
     pub id: Ident,
